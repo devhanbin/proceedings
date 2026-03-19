@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>회의록 자동 정리</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #f9f9f7; --surface: #fff; --border: #e5e4df; --border-strong: #c8c7c0;
+      --text-primary: #1a1a18; --text-secondary: #6b6b65; --text-muted: #9e9e98;
+      --accent: #2E75B6; --accent-light: #e8f1fa;
+      --danger: #c0392b; --danger-bg: #fff0ee; --danger-border: #f5b8b0; --danger-text: #a3301f;
+      --radius-sm: 8px; --radius-md: 12px; --radius-lg: 16px;
+    }
+    body { font-family: -apple-system,"Pretendard","Apple SD Gothic Neo",sans-serif; background: var(--bg); color: var(--text-primary); min-height: 100vh; display: flex; justify-content: center; padding: 3rem 1rem; }
+    .wrapper { width: 100%; max-width: 780px; }
+    .header { margin-bottom: 2rem; text-align: center; }
+    .header h1 { font-size: 28px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 6px; }
+    .header p { font-size: 14px; color: var(--text-secondary); }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 1.5rem; margin-bottom: 1rem; }
+    .card-label { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; color: var(--text-muted); text-transform: uppercase; margin-bottom: 14px; }
+    .record-panel { text-align: center; padding: 2rem 1rem; }
+    .record-status { font-size: 15px; color: var(--text-secondary); margin-bottom: 1.5rem; }
+    .record-status.recording { color: var(--danger); font-weight: 600; }
+    .timer { font-size: 48px; font-weight: 300; letter-spacing: 4px; margin-bottom: 1.5rem; font-variant-numeric: tabular-nums; }
+    .timer.recording { color: var(--danger); }
+    .waveform { display: flex; align-items: center; justify-content: center; gap: 4px; height: 48px; margin-bottom: 1.5rem; }
+    .wave-bar { width: 4px; background: var(--border); border-radius: 2px; height: 6px; }
+    .waveform.active .wave-bar { background: var(--danger); animation: wave 1s ease-in-out infinite; }
+    .wave-bar:nth-child(1){animation-delay:0s} .wave-bar:nth-child(2){animation-delay:.1s} .wave-bar:nth-child(3){animation-delay:.2s} .wave-bar:nth-child(4){animation-delay:.3s} .wave-bar:nth-child(5){animation-delay:.4s} .wave-bar:nth-child(6){animation-delay:.3s} .wave-bar:nth-child(7){animation-delay:.2s} .wave-bar:nth-child(8){animation-delay:.1s} .wave-bar:nth-child(9){animation-delay:0s}
+    @keyframes wave { 0%,100%{height:6px} 50%{height:36px} }
+    .btn-record { width: 80px; height: 80px; border-radius: 50%; border: none; cursor: pointer; font-size: 28px; display: flex; align-items: center; justify-content: center; margin: 0 auto; transition: all 0.2s; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+    .btn-record.idle { background: var(--accent); color: #fff; }
+    .btn-record.idle:hover { transform: scale(1.05); box-shadow: 0 6px 20px rgba(46,117,182,0.4); }
+    .btn-record.recording { background: var(--danger); color: #fff; animation: pulse 1.5s ease-in-out infinite; }
+    .btn-record:disabled { opacity: 0.4; cursor: not-allowed; animation: none; transform: none; }
+    @keyframes pulse { 0%,100%{box-shadow:0 4px 12px rgba(192,57,43,0.3)} 50%{box-shadow:0 4px 24px rgba(192,57,43,0.6)} }
+    .btn-label { font-size: 13px; color: var(--text-secondary); margin-top: 10px; }
+    .btn { padding: 10px 20px; font-size: 14px; font-weight: 500; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-primary); cursor: pointer; }
+    .btn:hover { background: var(--bg); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-download { background: #1a6b3c; color: #fff; border-color: #1a6b3c; }
+    .btn-download:hover { opacity: 0.88; background: #1a6b3c; }
+    .status { display: none; align-items: center; gap: 10px; font-size: 14px; color: var(--text-secondary); padding: 12px 0; justify-content: center; }
+    .spinner { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--text-primary); animation: spin 0.7s linear infinite; flex-shrink: 0; }
+    @keyframes spin { to{transform:rotate(360deg)} }
+    .error { display: none; background: var(--danger-bg); border: 1px solid var(--danger-border); color: var(--danger-text); font-size: 14px; padding: 10px 14px; border-radius: var(--radius-sm); margin-bottom: 1rem; }
+    .result { display: none; }
+    .tabs { display: flex; border-bottom: 2px solid var(--border); margin-bottom: 1.5rem; }
+    .tab { padding: 10px 20px; font-size: 14px; font-weight: 500; cursor: pointer; color: var(--text-secondary); border-bottom: 2px solid transparent; margin-bottom: -2px; }
+    .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    .info-grid { display: grid; grid-template-columns: 120px 1fr; }
+    .info-label { padding: 8px 12px; font-size: 13px; font-weight: 600; background: #f0f6fc; border: 1px solid var(--border); color: var(--accent); }
+    .info-value { padding: 8px 12px; font-size: 13px; border: 1px solid var(--border); border-left: none; }
+    .info-label:not(:first-child),.info-value:not(:nth-child(2)) { border-top: none; }
+    .section { margin-bottom: 1.5rem; }
+    .section-title { font-size: 15px; font-weight: 700; color: var(--accent); margin-bottom: 10px; padding-bottom: 6px; border-bottom: 2px solid var(--accent-light); }
+    .list-item { font-size: 14px; padding: 6px 0 6px 16px; border-bottom: 1px solid var(--bg); line-height: 1.6; position: relative; }
+    .list-item::before { content:"•"; position: absolute; left: 0; color: var(--accent); }
+    .discussion-item { margin-bottom: 12px; }
+    .discussion-topic { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+    .discussion-content { font-size: 13px; color: var(--text-secondary); line-height: 1.7; padding-left: 12px; border-left: 3px solid var(--accent-light); }
+    .action-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .action-table th { background: #f0f6fc; color: var(--accent); font-weight: 600; padding: 8px 12px; border: 1px solid var(--border); text-align: left; }
+    .action-table td { padding: 8px 12px; border: 1px solid var(--border); vertical-align: top; line-height: 1.5; }
+    .action-table tr:nth-child(even) td { background: var(--bg); }
+    .transcript-box { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 1rem; font-size: 13px; color: var(--text-secondary); line-height: 1.8; max-height: 200px; overflow-y: auto; white-space: pre-wrap; }
+    .actions-row { display: flex; gap: 8px; margin-top: 1rem; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+<div class="wrapper">
+  <div class="header">
+    <h1>🎙️ 회의록 자동 정리</h1>
+    <p>회의 시작 버튼을 누르면 녹음이 시작됩니다</p>
+  </div>
+
+  <div class="card">
+    <div class="record-panel">
+      <div class="record-status" id="recordStatus">회의 시작 버튼을 눌러 녹음을 시작하세요</div>
+      <div class="timer" id="timer">00:00:00</div>
+      <div class="waveform" id="waveform">
+        <div class="wave-bar"></div><div class="wave-bar"></div><div class="wave-bar"></div>
+        <div class="wave-bar"></div><div class="wave-bar"></div><div class="wave-bar"></div>
+        <div class="wave-bar"></div><div class="wave-bar"></div><div class="wave-bar"></div>
+      </div>
+      <button class="btn-record idle" id="recordBtn" onclick="toggleRecording()">▶</button>
+      <div class="btn-label" id="btnLabel">회의 시작</div>
+    </div>
+  </div>
+
+  <div id="errorBox" class="error"></div>
+  <div id="statusBox" class="status"><div class="spinner"></div><span id="statusText">처리 중...</span></div>
+
+  <div id="result" class="result">
+    <div class="card">
+      <div class="tabs">
+        <div class="tab active" onclick="switchTab('minutes')">📋 회의록</div>
+        <div class="tab" onclick="switchTab('transcript')">📝 속기록</div>
+      </div>
+      <div class="tab-content active" id="tab-minutes">
+        <div class="section">
+          <div class="section-title">📌 기본 정보</div>
+          <div class="info-grid">
+            <div class="info-label">회의 제목</div><div class="info-value" id="r-title"></div>
+            <div class="info-label">일시</div><div class="info-value" id="r-date"></div>
+            <div class="info-label">참석자</div><div class="info-value" id="r-attendees"></div>
+            <div class="info-label">다음 회의</div><div class="info-value" id="r-next"></div>
+          </div>
+        </div>
+        <div class="section"><div class="section-title">📋 안건</div><div id="r-agenda"></div></div>
+        <div class="section"><div class="section-title">💬 논의 내용</div><div id="r-discussions"></div></div>
+        <div class="section"><div class="section-title">✅ 결정사항</div><div id="r-decisions"></div></div>
+        <div class="section">
+          <div class="section-title">🎯 액션아이템</div>
+          <table class="action-table"><thead><tr><th>할일</th><th>담당자</th><th>기한</th></tr></thead><tbody id="r-actions"></tbody></table>
+        </div>
+      </div>
+      <div class="tab-content" id="tab-transcript">
+        <div class="section"><div class="section-title">📝 속기록</div><div class="transcript-box" id="r-transcript"></div></div>
+      </div>
+      <div class="actions-row">
+        <button class="btn btn-download" onclick="downloadDocx()">📄 Word 다운로드</button>
+        <button class="btn" onclick="resetAll()">🔄 새 회의</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/docx/8.5.0/docx.umd.min.js"></script>
+<script>
+  // ↓ 여기에 Groq API 키를 입력하세요
+  const GROQ_API_KEY = "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";
+
+  const GROQ_WHISPER = 'https://api.groq.com/openai/v1/audio/transcriptions';
+  const GROQ_CHAT = 'https://api.groq.com/openai/v1/chat/completions';
+  let mediaRecorder=null, audioChunks=[], isRecording=false, timerInterval=null, seconds=0, minutesData=null;
+
+  function switchTab(tab) {
+    document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',(i===0)===(tab==='minutes')));
+    document.getElementById('tab-minutes').classList.toggle('active',tab==='minutes');
+    document.getElementById('tab-transcript').classList.toggle('active',tab==='transcript');
+  }
+
+  function updateTimer() {
+    seconds++;
+    const h=String(Math.floor(seconds/3600)).padStart(2,'0'), m=String(Math.floor((seconds%3600)/60)).padStart(2,'0'), s=String(seconds%60).padStart(2,'0');
+    document.getElementById('timer').textContent=`${h}:${m}:${s}`;
+  }
+
+  async function toggleRecording() { if(!isRecording) await startRecording(); else await stopRecording(); }
+
+  async function startRecording() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+      audioChunks=[];
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')?'audio/webm;codecs=opus':'audio/webm';
+      mediaRecorder = new MediaRecorder(stream,{mimeType});
+      mediaRecorder.ondataavailable = e=>{if(e.data.size>0) audioChunks.push(e.data);};
+      mediaRecorder.start(1000);
+      isRecording=true; seconds=0;
+      timerInterval=setInterval(updateTimer,1000);
+      document.getElementById('recordBtn').className='btn-record recording';
+      document.getElementById('recordBtn').textContent='⏹';
+      document.getElementById('btnLabel').textContent='회의 종료';
+      document.getElementById('recordStatus').textContent='🔴 녹음 중...';
+      document.getElementById('recordStatus').className='record-status recording';
+      document.getElementById('timer').className='timer recording';
+      document.getElementById('waveform').classList.add('active');
+      document.getElementById('errorBox').style.display='none';
+      document.getElementById('result').style.display='none';
+    } catch(e) { showError('마이크 접근 권한이 필요합니다. 브라우저 설정에서 마이크를 허용해주세요.'); }
+  }
+
+  async function stopRecording() {
+    mediaRecorder.stream.getTracks().forEach(t=>t.stop());
+    clearInterval(timerInterval);
+    isRecording=false;
+    document.getElementById('recordBtn').disabled=true;
+    document.getElementById('recordBtn').textContent='⏳';
+    document.getElementById('btnLabel').textContent='처리 중...';
+    document.getElementById('recordStatus').textContent='녹음 완료! 회의록 생성 중...';
+    document.getElementById('recordStatus').className='record-status';
+    document.getElementById('timer').className='timer';
+    document.getElementById('waveform').classList.remove('active');
+    await new Promise(resolve=>{mediaRecorder.onstop=resolve; mediaRecorder.stop();});
+    const blob=new Blob(audioChunks,{type:mediaRecorder.mimeType});
+    await processAudio(blob);
+    document.getElementById('recordBtn').disabled=false;
+    document.getElementById('recordBtn').className='btn-record idle';
+    document.getElementById('recordBtn').textContent='▶';
+    document.getElementById('btnLabel').textContent='새 회의 시작';
+  }
+
+  async function processAudio(blob) {
+    showStatus('🎤 음성을 텍스트로 변환하는 중...');
+    try {
+      const formData=new FormData();
+      formData.append('file',blob,'recording.webm');
+      formData.append('model','whisper-large-v3-turbo');
+      formData.append('response_format','text');
+      formData.append('language','ko');
+      const wRes=await fetch(GROQ_WHISPER,{method:'POST',headers:{'Authorization':`Bearer ${GROQ_API_KEY}`},body:formData});
+      if(!wRes.ok) throw new Error(`음성인식 실패: ${await wRes.text()}`);
+      const transcript=await wRes.text();
+      showStatus('📝 회의록을 작성하는 중...');
+      const prompt=`다음은 회의 음성을 텍스트로 변환한 내용입니다.\n\n${transcript}\n\n위 내용을 바탕으로 아래 형식의 회의록을 작성해주세요. 반드시 JSON 형식으로만 응답하고 다른 텍스트는 포함하지 마세요.\n\n{"title":"회의 제목","date":"일시 (언급된 경우, 없으면 미기재)","attendees":["참석자1"],"agenda":["안건1"],"discussions":[{"topic":"주제","content":"논의 내용"}],"decisions":["결정사항1"],"action_items":[{"task":"할일","owner":"담당자","due":"기한"}],"next_meeting":"다음 회의 일정 (없으면 미정)"}`;
+      const cRes=await fetch(GROQ_CHAT,{method:'POST',headers:{'Authorization':`Bearer ${GROQ_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify({model:'llama-3.3-70b-versatile',messages:[{role:'user',content:prompt}],max_tokens:2048})});
+      if(!cRes.ok) throw new Error(`회의록 생성 실패: ${await cRes.text()}`);
+      const cData=await cRes.json();
+      let content=cData.choices[0].message.content.trim().replace(/```json|```/g,'').trim();
+      minutesData=JSON.parse(content);
+      renderMinutes(minutesData);
+      document.getElementById('r-transcript').textContent=transcript;
+      document.getElementById('statusBox').style.display='none';
+      document.getElementById('result').style.display='block';
+      document.getElementById('recordStatus').textContent='✅ 회의록이 생성되었습니다!';
+      document.getElementById('result').scrollIntoView({behavior:'smooth'});
+    } catch(e) {
+      showError('오류: '+e.message);
+      document.getElementById('statusBox').style.display='none';
+      document.getElementById('recordStatus').textContent='오류가 발생했습니다. 다시 시도해주세요.';
+    }
+  }
+
+  function showError(msg){document.getElementById('errorBox').textContent=msg;document.getElementById('errorBox').style.display='block';document.getElementById('statusBox').style.display='none';}
+  function showStatus(msg){document.getElementById('errorBox').style.display='none';document.getElementById('statusText').textContent=msg;document.getElementById('statusBox').style.display='flex';}
+
+  function renderMinutes(m) {
+    document.getElementById('r-title').textContent=m.title||'-';
+    document.getElementById('r-date').textContent=m.date||'미기재';
+    document.getElementById('r-attendees').textContent=(m.attendees||[]).join(', ')||'미기재';
+    document.getElementById('r-next').textContent=m.next_meeting||'미정';
+    document.getElementById('r-agenda').innerHTML=(m.agenda||[]).map(a=>`<div class="list-item">${a}</div>`).join('')||'<div class="list-item" style="color:var(--text-muted)">없음</div>';
+    document.getElementById('r-discussions').innerHTML=(m.discussions||[]).map(d=>`<div class="discussion-item"><div class="discussion-topic">${d.topic}</div><div class="discussion-content">${d.content}</div></div>`).join('');
+    document.getElementById('r-decisions').innerHTML=(m.decisions||[]).map(d=>`<div class="list-item">${d}</div>`).join('')||'<div class="list-item" style="color:var(--text-muted)">없음</div>';
+    document.getElementById('r-actions').innerHTML=(m.action_items||[]).map(a=>`<tr><td>${a.task||''}</td><td>${a.owner||'미정'}</td><td>${a.due||'미정'}</td></tr>`).join('');
+  }
+
+  async function downloadDocx() {
+    if(!minutesData) return;
+    const {Document,Packer,Paragraph,TextRun,HeadingLevel,AlignmentType,LevelFormat,Table,TableRow,TableCell,WidthType,ShadingType,BorderStyle}=docx;
+    const m=minutesData, font="맑은 고딕";
+    const border={style:BorderStyle.SINGLE,size:1,color:"CCCCCC"};
+    const borders={top:border,bottom:border,left:border,right:border};
+    const cell=(text,isHeader=false,w=4000)=>new TableCell({borders,width:{size:w,type:WidthType.DXA},shading:isHeader?{fill:"D5E8F0",type:ShadingType.CLEAR}:undefined,margins:{top:80,bottom:80,left:120,right:120},children:[new Paragraph({children:[new TextRun({text:String(text||''),bold:isHeader,size:22,font})]})]});
+    const children=[
+      new Paragraph({alignment:AlignmentType.CENTER,children:[new TextRun({text:m.title||'회의록',bold:true,size:36,font})]}),
+      new Paragraph({children:[]}),
+      new Table({width:{size:9026,type:WidthType.DXA},columnWidths:[2000,7026],rows:[
+        new TableRow({children:[cell('일시',true,2000),cell(m.date||'미기재',false,7026)]}),
+        new TableRow({children:[cell('참석자',true,2000),cell((m.attendees||[]).join(', '),false,7026)]}),
+        new TableRow({children:[cell('다음 회의',true,2000),cell(m.next_meeting||'미정',false,7026)]}),
+      ]}),
+      new Paragraph({children:[]}),
+    ];
+    const sec=t=>new Paragraph({heading:HeadingLevel.HEADING_2,children:[new TextRun({text:t,bold:true,size:26,font,color:"2E75B6"})]});
+    const bul=t=>new Paragraph({numbering:{reference:"bullets",level:0},children:[new TextRun({text:t,size:22,font})]});
+    if(m.agenda?.length){children.push(sec('📋 안건'));m.agenda.forEach(a=>children.push(bul(a)));children.push(new Paragraph({children:[]}));}
+    if(m.discussions?.length){children.push(sec('💬 논의 내용'));m.discussions.forEach(d=>{children.push(new Paragraph({children:[new TextRun({text:d.topic,bold:true,size:22,font})]}));children.push(new Paragraph({children:[new TextRun({text:d.content,size:22,font})]}));children.push(new Paragraph({children:[]}));});}
+    if(m.decisions?.length){children.push(sec('✅ 결정사항'));m.decisions.forEach(d=>children.push(bul(d)));children.push(new Paragraph({children:[]}));}
+    if(m.action_items?.length){children.push(sec('🎯 액션아이템'));children.push(new Table({width:{size:9026,type:WidthType.DXA},columnWidths:[4000,2500,2526],rows:[new TableRow({children:[cell('할일',true,4000),cell('담당자',true,2500),cell('기한',true,2526)]}), ...m.action_items.map(a=>new TableRow({children:[cell(a.task,false,4000),cell(a.owner||'미정',false,2500),cell(a.due||'미정',false,2526)]}))]}))}
+    const doc2=new Document({numbering:{config:[{reference:"bullets",levels:[{level:0,format:LevelFormat.BULLET,text:"•",alignment:AlignmentType.LEFT,style:{paragraph:{indent:{left:720,hanging:360}}}}]}]},styles:{default:{document:{run:{font,size:22}}},paragraphStyles:[{id:"Heading2",name:"Heading 2",basedOn:"Normal",next:"Normal",quickFormat:true,run:{size:26,bold:true,font,color:"2E75B6"},paragraph:{spacing:{before:200,after:100},outlineLevel:1}}]},sections:[{properties:{page:{size:{width:11906,height:16838},margin:{top:1440,right:1440,bottom:1440,left:1440}}},children}]});
+    const buffer=await Packer.toBlob(doc2);
+    const url=URL.createObjectURL(buffer);
+    const a=document.createElement('a');
+    a.href=url; a.download='회의록.docx'; a.click(); URL.revokeObjectURL(url);
+  }
+
+  function resetAll(){minutesData=null;seconds=0;document.getElementById('timer').textContent='00:00:00';document.getElementById('timer').className='timer';document.getElementById('recordStatus').textContent='회의 시작 버튼을 눌러 녹음을 시작하세요';document.getElementById('recordStatus').className='record-status';document.getElementById('result').style.display='none';document.getElementById('errorBox').style.display='none';document.getElementById('statusBox').style.display='none';}
+</script>
+</body>
+</html>
