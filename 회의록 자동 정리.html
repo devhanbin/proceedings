@@ -11,7 +11,7 @@
       --text-primary: #1a1a18; --text-secondary: #6b6b65; --text-muted: #9e9e98;
       --accent: #2E75B6; --accent-light: #e8f1fa;
       --danger: #c0392b; --danger-bg: #fff0ee; --danger-border: #f5b8b0; --danger-text: #a3301f;
-      --radius-sm: 8px; --radius-md: 12px; --radius-lg: 16px;
+      --radius-sm: 8px; --radius-lg: 16px;
     }
     body { font-family: -apple-system,"Pretendard","Apple SD Gothic Neo",sans-serif; background: var(--bg); color: var(--text-primary); min-height: 100vh; display: flex; justify-content: center; padding: 3rem 1rem; }
     .wrapper { width: 100%; max-width: 780px; }
@@ -28,11 +28,11 @@
     .waveform { display: flex; align-items: center; justify-content: center; gap: 4px; height: 48px; margin-bottom: 1.5rem; }
     .wave-bar { width: 4px; background: var(--border); border-radius: 2px; height: 6px; }
     .waveform.active .wave-bar { background: var(--danger); animation: wave 1s ease-in-out infinite; }
-    .wave-bar:nth-child(1){animation-delay:0s} .wave-bar:nth-child(2){animation-delay:.1s} .wave-bar:nth-child(3){animation-delay:.2s} .wave-bar:nth-child(4){animation-delay:.3s} .wave-bar:nth-child(5){animation-delay:.4s} .wave-bar:nth-child(6){animation-delay:.3s} .wave-bar:nth-child(7){animation-delay:.2s} .wave-bar:nth-child(8){animation-delay:.1s} .wave-bar:nth-child(9){animation-delay:0s}
+    .wave-bar:nth-child(1){animation-delay:0s}.wave-bar:nth-child(2){animation-delay:.1s}.wave-bar:nth-child(3){animation-delay:.2s}.wave-bar:nth-child(4){animation-delay:.3s}.wave-bar:nth-child(5){animation-delay:.4s}.wave-bar:nth-child(6){animation-delay:.3s}.wave-bar:nth-child(7){animation-delay:.2s}.wave-bar:nth-child(8){animation-delay:.1s}.wave-bar:nth-child(9){animation-delay:0s}
     @keyframes wave { 0%,100%{height:6px} 50%{height:36px} }
     .btn-record { width: 80px; height: 80px; border-radius: 50%; border: none; cursor: pointer; font-size: 28px; display: flex; align-items: center; justify-content: center; margin: 0 auto; transition: all 0.2s; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
     .btn-record.idle { background: var(--accent); color: #fff; }
-    .btn-record.idle:hover { transform: scale(1.05); box-shadow: 0 6px 20px rgba(46,117,182,0.4); }
+    .btn-record.idle:hover { transform: scale(1.05); }
     .btn-record.recording { background: var(--danger); color: #fff; animation: pulse 1.5s ease-in-out infinite; }
     .btn-record:disabled { opacity: 0.4; cursor: not-allowed; animation: none; transform: none; }
     @keyframes pulse { 0%,100%{box-shadow:0 4px 12px rgba(192,57,43,0.3)} 50%{box-shadow:0 4px 24px rgba(192,57,43,0.6)} }
@@ -46,6 +46,9 @@
     .spinner { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--text-primary); animation: spin 0.7s linear infinite; flex-shrink: 0; }
     @keyframes spin { to{transform:rotate(360deg)} }
     .error { display: none; background: var(--danger-bg); border: 1px solid var(--danger-border); color: var(--danger-text); font-size: 14px; padding: 10px 14px; border-radius: var(--radius-sm); margin-bottom: 1rem; }
+    .live-card { display: none; }
+    .live-transcript { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 1rem; font-size: 13px; color: var(--text-secondary); line-height: 1.8; max-height: 150px; overflow-y: auto; white-space: pre-wrap; min-height: 48px; }
+    .chunk-badge { display: inline-block; background: var(--accent-light); color: var(--accent); font-size: 12px; padding: 2px 8px; border-radius: 10px; margin-left: 8px; }
     .result { display: none; }
     .tabs { display: flex; border-bottom: 2px solid var(--border); margin-bottom: 1.5rem; }
     .tab { padding: 10px 20px; font-size: 14px; font-weight: 500; cursor: pointer; color: var(--text-secondary); border-bottom: 2px solid transparent; margin-bottom: -2px; }
@@ -75,7 +78,7 @@
 <div class="wrapper">
   <div class="header">
     <h1>🎙️ 회의록 자동 정리</h1>
-    <p>회의 시작 버튼을 누르면 녹음이 시작됩니다</p>
+    <p>회의 시작 버튼을 누르면 녹음이 시작됩니다 • 10분마다 실시간 속기록 생성</p>
   </div>
 
   <div class="card">
@@ -92,6 +95,15 @@
     </div>
   </div>
 
+  <!-- 실시간 속기록 -->
+  <div class="card live-card" id="live-transcript-card">
+    <div class="card-label">
+      📝 실시간 속기록
+      <span class="chunk-badge" id="chunkBadge">0 구간</span>
+    </div>
+    <div class="live-transcript" id="live-transcript">녹음이 시작되면 10분마다 속기록이 여기에 쌓입니다...</div>
+  </div>
+
   <div id="errorBox" class="error"></div>
   <div id="statusBox" class="status"><div class="spinner"></div><span id="statusText">처리 중...</span></div>
 
@@ -99,7 +111,7 @@
     <div class="card">
       <div class="tabs">
         <div class="tab active" onclick="switchTab('minutes')">📋 회의록</div>
-        <div class="tab" onclick="switchTab('transcript')">📝 속기록</div>
+        <div class="tab" onclick="switchTab('transcript')">📝 전체 속기록</div>
       </div>
       <div class="tab-content active" id="tab-minutes">
         <div class="section">
@@ -120,7 +132,7 @@
         </div>
       </div>
       <div class="tab-content" id="tab-transcript">
-        <div class="section"><div class="section-title">📝 속기록</div><div class="transcript-box" id="r-transcript"></div></div>
+        <div class="section"><div class="section-title">📝 전체 속기록</div><div class="transcript-box" id="r-transcript"></div></div>
       </div>
       <div class="actions-row">
         <button class="btn btn-download" onclick="downloadDocx()">📄 Word 다운로드</button>
@@ -132,12 +144,15 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/docx/8.5.0/docx.umd.min.js"></script>
 <script>
-  // ↓ 여기에 Groq API 키를 입력하세요
   const GROQ_API_KEY = "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";
-
   const GROQ_WHISPER = 'https://api.groq.com/openai/v1/audio/transcriptions';
   const GROQ_CHAT = 'https://api.groq.com/openai/v1/chat/completions';
-  let mediaRecorder=null, audioChunks=[], isRecording=false, timerInterval=null, seconds=0, minutesData=null;
+  const CHUNK_INTERVAL_MS = 10 * 60 * 1000; // 10분
+
+  let mediaRecorder=null, audioChunks=[], isRecording=false;
+  let timerInterval=null, chunkInterval=null, seconds=0;
+  let minutesData=null, mimeType='audio/webm';
+  let fullTranscript='', chunkCount=0;
 
   function switchTab(tab) {
     document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',(i===0)===(tab==='minutes')));
@@ -147,22 +162,51 @@
 
   function updateTimer() {
     seconds++;
-    const h=String(Math.floor(seconds/3600)).padStart(2,'0'), m=String(Math.floor((seconds%3600)/60)).padStart(2,'0'), s=String(seconds%60).padStart(2,'0');
+    const h=String(Math.floor(seconds/3600)).padStart(2,'0');
+    const m=String(Math.floor((seconds%3600)/60)).padStart(2,'0');
+    const s=String(seconds%60).padStart(2,'0');
     document.getElementById('timer').textContent=`${h}:${m}:${s}`;
   }
 
   async function toggleRecording() { if(!isRecording) await startRecording(); else await stopRecording(); }
 
+  async function flushChunk() {
+    if(audioChunks.length === 0) return;
+    const chunks = audioChunks.splice(0);
+    const blob = new Blob(chunks, {type: mimeType});
+    if(blob.size < 5000) return;
+    try {
+      const formData = new FormData();
+      formData.append('file', blob, 'chunk.webm');
+      formData.append('model', 'whisper-large-v3-turbo');
+      formData.append('response_format', 'text');
+      formData.append('language', 'ko');
+      const res = await fetch(GROQ_WHISPER, {method:'POST', headers:{'Authorization':`Bearer ${GROQ_API_KEY}`}, body: formData});
+      if(!res.ok) { console.warn('청크 변환 실패:', await res.text()); return; }
+      const text = (await res.text()).trim();
+      if(text) {
+        fullTranscript += (fullTranscript ? '\n' : '') + text;
+        chunkCount++;
+        const liveEl = document.getElementById('live-transcript');
+        liveEl.textContent = fullTranscript;
+        liveEl.scrollTop = liveEl.scrollHeight;
+        document.getElementById('chunkBadge').textContent = `${chunkCount} 구간 완료`;
+        if(isRecording) document.getElementById('recordStatus').textContent = `🔴 녹음 중... (${chunkCount}구간 속기록 완료)`;
+      }
+    } catch(e) { console.warn('청크 처리 오류:', e); }
+  }
+
   async function startRecording() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({audio:true});
-      audioChunks=[];
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')?'audio/webm;codecs=opus':'audio/webm';
+      audioChunks=[]; fullTranscript=''; chunkCount=0;
+      mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')?'audio/webm;codecs=opus':'audio/webm';
       mediaRecorder = new MediaRecorder(stream,{mimeType});
       mediaRecorder.ondataavailable = e=>{if(e.data.size>0) audioChunks.push(e.data);};
       mediaRecorder.start(1000);
       isRecording=true; seconds=0;
       timerInterval=setInterval(updateTimer,1000);
+      chunkInterval=setInterval(flushChunk, CHUNK_INTERVAL_MS);
       document.getElementById('recordBtn').className='btn-record recording';
       document.getElementById('recordBtn').textContent='⏹';
       document.getElementById('btnLabel').textContent='회의 종료';
@@ -172,49 +216,46 @@
       document.getElementById('waveform').classList.add('active');
       document.getElementById('errorBox').style.display='none';
       document.getElementById('result').style.display='none';
+      document.getElementById('live-transcript-card').style.display='block';
+      document.getElementById('live-transcript').textContent='녹음 중... 10분마다 속기록이 업데이트됩니다.';
+      document.getElementById('chunkBadge').textContent='0 구간';
     } catch(e) { showError('마이크 접근 권한이 필요합니다. 브라우저 설정에서 마이크를 허용해주세요.'); }
   }
 
   async function stopRecording() {
-    mediaRecorder.stream.getTracks().forEach(t=>t.stop());
     clearInterval(timerInterval);
+    clearInterval(chunkInterval);
     isRecording=false;
     document.getElementById('recordBtn').disabled=true;
     document.getElementById('recordBtn').textContent='⏳';
     document.getElementById('btnLabel').textContent='처리 중...';
-    document.getElementById('recordStatus').textContent='녹음 완료! 회의록 생성 중...';
+    document.getElementById('recordStatus').textContent='녹음 완료! 마지막 구간 변환 중...';
     document.getElementById('recordStatus').className='record-status';
     document.getElementById('timer').className='timer';
     document.getElementById('waveform').classList.remove('active');
     await new Promise(resolve=>{mediaRecorder.onstop=resolve; mediaRecorder.stop();});
-    const blob=new Blob(audioChunks,{type:mediaRecorder.mimeType});
-    await processAudio(blob);
+    mediaRecorder.stream.getTracks().forEach(t=>t.stop());
+    showStatus('🎤 마지막 구간 음성 변환 중...');
+    await flushChunk();
+    await generateMinutes(fullTranscript);
     document.getElementById('recordBtn').disabled=false;
     document.getElementById('recordBtn').className='btn-record idle';
     document.getElementById('recordBtn').textContent='▶';
     document.getElementById('btnLabel').textContent='새 회의 시작';
   }
 
-  async function processAudio(blob) {
-    showStatus('🎤 음성을 텍스트로 변환하는 중...');
+  async function generateMinutes(transcript) {
+    if(!transcript.trim()) { showError('음성이 인식되지 않았습니다. 다시 시도해주세요.'); return; }
+    showStatus('📝 회의록을 작성하는 중...');
     try {
-      const formData=new FormData();
-      formData.append('file',blob,'recording.webm');
-      formData.append('model','whisper-large-v3-turbo');
-      formData.append('response_format','text');
-      formData.append('language','ko');
-      const wRes=await fetch(GROQ_WHISPER,{method:'POST',headers:{'Authorization':`Bearer ${GROQ_API_KEY}`},body:formData});
-      if(!wRes.ok) throw new Error(`음성인식 실패: ${await wRes.text()}`);
-      const transcript=await wRes.text();
-      showStatus('📝 회의록을 작성하는 중...');
-      const prompt=`다음은 회의 음성을 텍스트로 변환한 내용입니다.\n\n${transcript}\n\n위 내용을 바탕으로 아래 형식의 회의록을 작성해주세요. 반드시 JSON 형식으로만 응답하고 다른 텍스트는 포함하지 마세요.\n\n{"title":"회의 제목","date":"일시 (언급된 경우, 없으면 미기재)","attendees":["참석자1"],"agenda":["안건1"],"discussions":[{"topic":"주제","content":"논의 내용"}],"decisions":["결정사항1"],"action_items":[{"task":"할일","owner":"담당자","due":"기한"}],"next_meeting":"다음 회의 일정 (없으면 미정)"}`;
-      const cRes=await fetch(GROQ_CHAT,{method:'POST',headers:{'Authorization':`Bearer ${GROQ_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify({model:'llama-3.3-70b-versatile',messages:[{role:'user',content:prompt}],max_tokens:2048})});
+      const prompt = `다음은 회의 음성을 텍스트로 변환한 내용입니다.\n\n${transcript}\n\n위 내용을 바탕으로 아래 형식의 회의록을 작성해주세요. 반드시 JSON 형식으로만 응답하고 다른 텍스트는 포함하지 마세요.\n\n{"title":"회의 제목","date":"일시 (언급된 경우, 없으면 미기재)","attendees":["참석자1"],"agenda":["안건1"],"discussions":[{"topic":"주제","content":"논의 내용"}],"decisions":["결정사항1"],"action_items":[{"task":"할일","owner":"담당자","due":"기한"}],"next_meeting":"다음 회의 일정 (없으면 미정)"}`;
+      const cRes = await fetch(GROQ_CHAT, {method:'POST', headers:{'Authorization':`Bearer ${GROQ_API_KEY}`,'Content-Type':'application/json'}, body: JSON.stringify({model:'llama-3.3-70b-versatile', messages:[{role:'user',content:prompt}], max_tokens:2048})});
       if(!cRes.ok) throw new Error(`회의록 생성 실패: ${await cRes.text()}`);
-      const cData=await cRes.json();
-      let content=cData.choices[0].message.content.trim().replace(/```json|```/g,'').trim();
-      minutesData=JSON.parse(content);
+      const cData = await cRes.json();
+      let content = cData.choices[0].message.content.trim().replace(/```json|```/g,'').trim();
+      minutesData = JSON.parse(content);
       renderMinutes(minutesData);
-      document.getElementById('r-transcript').textContent=transcript;
+      document.getElementById('r-transcript').textContent = transcript;
       document.getElementById('statusBox').style.display='none';
       document.getElementById('result').style.display='block';
       document.getElementById('recordStatus').textContent='✅ 회의록이 생성되었습니다!';
@@ -270,7 +311,17 @@
     a.href=url; a.download='회의록.docx'; a.click(); URL.revokeObjectURL(url);
   }
 
-  function resetAll(){minutesData=null;seconds=0;document.getElementById('timer').textContent='00:00:00';document.getElementById('timer').className='timer';document.getElementById('recordStatus').textContent='회의 시작 버튼을 눌러 녹음을 시작하세요';document.getElementById('recordStatus').className='record-status';document.getElementById('result').style.display='none';document.getElementById('errorBox').style.display='none';document.getElementById('statusBox').style.display='none';}
+  function resetAll(){
+    minutesData=null; seconds=0; fullTranscript=''; chunkCount=0;
+    document.getElementById('timer').textContent='00:00:00';
+    document.getElementById('timer').className='timer';
+    document.getElementById('recordStatus').textContent='회의 시작 버튼을 눌러 녹음을 시작하세요';
+    document.getElementById('recordStatus').className='record-status';
+    document.getElementById('result').style.display='none';
+    document.getElementById('live-transcript-card').style.display='none';
+    document.getElementById('errorBox').style.display='none';
+    document.getElementById('statusBox').style.display='none';
+  }
 </script>
 </body>
 </html>
