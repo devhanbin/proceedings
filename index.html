@@ -75,6 +75,11 @@
     .transcript-box { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 1rem; font-size: 13px; color: var(--text-secondary); line-height: 1.8; max-height: 200px; overflow-y: auto; white-space: pre-wrap; }
     .actions-row { display: flex; gap: 8px; margin-top: 1rem; flex-wrap: wrap; }
     .calendar-status { display: none; margin-top: 10px; font-size: 13px; color: #1a6b3c; }
+    /* 인라인 편집 스타일 */
+    [contenteditable] { outline: none; border-radius: 3px; transition: background 0.15s; }
+    [contenteditable]:hover { background: #f0f6fc; cursor: text; }
+    [contenteditable]:focus { background: #e8f1fa; box-shadow: 0 0 0 2px rgba(46,117,182,0.2); }
+    .edit-hint { font-size: 11px; color: var(--text-muted); margin-bottom: 8px; }
   </style>
 </head>
 <body>
@@ -112,6 +117,7 @@
         <div class="tab active" onclick="switchTab('minutes')">📋 회의록</div>
         <div class="tab" onclick="switchTab('transcript')">📝 전체 속기록</div>
       </div>
+      <div class="edit-hint" id="edit-hint" style="display:none">✏️ 내용을 클릭하면 바로 수정할 수 있어요</div>
       <div class="tab-content active" id="tab-minutes">
         <div class="section">
           <div class="section-title">📌 기본 정보</div>
@@ -127,7 +133,7 @@
         <div class="section"><div class="section-title">✅ 결정사항</div><div id="r-decisions"></div></div>
         <div class="section">
           <div class="section-title">🎯 액션아이템</div>
-          <table class="action-table"><thead><tr><th>할일</th><th>담당자</th><th>기한</th></tr></thead><tbody id="r-actions"></tbody></table>
+          <table class="action-table"><thead><tr><th style="width:40px;text-align:center"><input type="checkbox" id="checkAll" onclick="toggleAllChecks(this)" title="전체선택"></th><th>할일</th><th>담당자</th><th>기한</th></tr></thead><tbody id="r-actions"></tbody></table>
         </div>
       </div>
       <div class="tab-content" id="tab-transcript">
@@ -143,11 +149,11 @@
   </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/docx/8.5.0/docx.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.min.js"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
-  const BACKEND = 'https://proceedings-f9gn.onrender.com'; // 배포 후 변경
-  const GOOGLE_CLIENT_ID = '468678113505-noaosp7aqdmq6rhp3hsls5adbjlcdq5l.apps.googleusercontent.com';
+  const BACKEND = 'https://proceedings-api.onrender.com'; // 배포 후 변경
+  const GOOGLE_CLIENT_ID = '여기에_클라이언트ID_입력';
   const CHUNK_INTERVAL_MS = 10 * 60 * 1000;
 
   let mediaRecorder=null, audioChunks=[], isRecording=false;
@@ -282,22 +288,54 @@
     });
   }
 
+  function toggleAllChecks(el) {
+    document.querySelectorAll('.action-check').forEach(cb => cb.checked = el.checked);
+  }
+
   async function addToCalendar() {
     if(!minutesData) return;
+    syncMinutesData();
     const items = minutesData.action_items || [];
     if(items.length === 0) { alert('액션아이템이 없습니다.'); return; }
+
+    // 체크된 항목만 필터링
+    const checked = document.querySelectorAll('.action-check:checked');
+    if(checked.length === 0) { alert('캘린더에 등록할 항목을 선택해주세요.'); return; }
+    const selectedItems = Array.from(checked).map(cb => items[parseInt(cb.dataset.index)]);
     const btn = document.getElementById('calendarBtn');
     btn.disabled=true; btn.textContent='⏳ 로그인 중...';
     try {
       const token = await getGoogleToken();
       btn.textContent='⏳ 등록 중...';
       let success=0;
-      for(const item of items) {
+      for(const item of selectedItems) {
         let startDate = new Date();
         startDate.setDate(startDate.getDate()+1);
+        startDate.setHours(9, 0, 0, 0); // 기본 오전 9시
+
         if(item.due && item.due !== '미정') {
-          const parsed = new Date(item.due);
-          if(!isNaN(parsed)) startDate = parsed;
+          // 한국어 날짜 파싱 ("4월 5일", "2026-04-05", "4/5" 등)
+          const due = item.due;
+          const now = new Date();
+          const year = now.getFullYear();
+
+          // "N월 N일" 형식
+          const koMatch = due.match(/(\d{1,2})월\s*(\d{1,2})일/);
+          // "YYYY-MM-DD" 형식
+          const isoMatch = due.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+          // "N/N" 형식
+          const slashMatch = due.match(/(\d{1,2})\/(\d{1,2})/);
+
+          if(isoMatch) {
+            startDate = new Date(parseInt(isoMatch[1]), parseInt(isoMatch[2])-1, parseInt(isoMatch[3]), 9, 0, 0);
+          } else if(koMatch) {
+            startDate = new Date(year, parseInt(koMatch[1])-1, parseInt(koMatch[2]), 9, 0, 0);
+          } else if(slashMatch) {
+            startDate = new Date(year, parseInt(slashMatch[1])-1, parseInt(slashMatch[2]), 9, 0, 0);
+          } else {
+            const parsed = new Date(due);
+            if(!isNaN(parsed)) { startDate = parsed; startDate.setHours(9,0,0,0); }
+          }
         }
         const endDate = new Date(startDate);
         endDate.setHours(endDate.getHours()+1);
@@ -328,18 +366,52 @@
   function showStatus(msg){document.getElementById('errorBox').style.display='none';document.getElementById('statusText').textContent=msg;document.getElementById('statusBox').style.display='flex';}
 
   function renderMinutes(m) {
-    document.getElementById('r-title').textContent=m.title||'-';
-    document.getElementById('r-date').textContent=m.date||'미기재';
-    document.getElementById('r-attendees').textContent=(m.attendees||[]).join(', ')||'미기재';
-    document.getElementById('r-next').textContent=m.next_meeting||'미정';
-    document.getElementById('r-agenda').innerHTML=(m.agenda||[]).map(a=>`<div class="list-item">${a}</div>`).join('')||'<div class="list-item" style="color:var(--text-muted)">없음</div>';
-    document.getElementById('r-discussions').innerHTML=(m.discussions||[]).map(d=>`<div class="discussion-item"><div class="discussion-topic">${d.topic}</div><div class="discussion-content">${d.content}</div></div>`).join('');
-    document.getElementById('r-decisions').innerHTML=(m.decisions||[]).map(d=>`<div class="list-item">${d}</div>`).join('')||'<div class="list-item" style="color:var(--text-muted)">없음</div>';
-    document.getElementById('r-actions').innerHTML=(m.action_items||[]).map(a=>`<tr><td>${a.task||''}</td><td>${a.owner||'미정'}</td><td>${a.due||'미정'}</td></tr>`).join('');
+    document.getElementById('r-title').innerHTML=`<span contenteditable="true">${m.title||'-'}</span>`;
+    document.getElementById('r-date').innerHTML=`<span contenteditable="true">${m.date||'미기재'}</span>`;
+    document.getElementById('r-attendees').innerHTML=`<span contenteditable="true">${(m.attendees||[]).join(', ')||'미기재'}</span>`;
+    document.getElementById('r-next').innerHTML=`<span contenteditable="true">${m.next_meeting||'미정'}</span>`;
+    document.getElementById('edit-hint').style.display='block';
+    document.getElementById('r-agenda').innerHTML=(m.agenda||[]).map((a,i)=>
+      `<div class="list-item"><span contenteditable="true" data-field="agenda" data-index="${i}">${a}</span></div>`
+    ).join('')||'<div class="list-item" style="color:var(--text-muted)">없음</div>';
+    document.getElementById('r-discussions').innerHTML=(m.discussions||[]).map((d,i)=>
+      `<div class="discussion-item">
+        <div class="discussion-topic"><span contenteditable="true" data-field="disc-topic" data-index="${i}">${d.topic}</span></div>
+        <div class="discussion-content"><span contenteditable="true" data-field="disc-content" data-index="${i}">${d.content}</span></div>
+      </div>`
+    ).join('');
+    document.getElementById('r-decisions').innerHTML=(m.decisions||[]).map((d,i)=>
+      `<div class="list-item"><span contenteditable="true" data-field="decisions" data-index="${i}">${d}</span></div>`
+    ).join('')||'<div class="list-item" style="color:var(--text-muted)">없음</div>';
+    document.getElementById('r-actions').innerHTML=(m.action_items||[]).map((a,i)=>
+      `<tr>
+        <td style="text-align:center"><input type="checkbox" class="action-check" data-index="${i}" checked></td>
+        <td><span contenteditable="true" data-field="task" data-index="${i}">${a.task||''}</span></td>
+        <td><span contenteditable="true" data-field="owner" data-index="${i}">${a.owner||'미정'}</span></td>
+        <td><span contenteditable="true" data-field="due" data-index="${i}">${a.due||'미정'}</span></td>
+      </tr>`
+    ).join('');
+    document.getElementById('checkAll').checked=true;
+  }
+
+  function syncMinutesData() {
+    if(!minutesData) return;
+    minutesData.title = document.querySelector('#r-title [contenteditable]')?.innerText.trim() || minutesData.title;
+    minutesData.date = document.querySelector('#r-date [contenteditable]')?.innerText.trim() || minutesData.date;
+    minutesData.attendees = (document.querySelector('#r-attendees [contenteditable]')?.innerText||'').split(',').map(s=>s.trim()).filter(Boolean);
+    minutesData.next_meeting = document.querySelector('#r-next [contenteditable]')?.innerText.trim() || minutesData.next_meeting;
+    document.querySelectorAll('[data-field="agenda"]').forEach((el,i)=>{ if(minutesData.agenda[i]!==undefined) minutesData.agenda[i]=el.innerText.trim(); });
+    document.querySelectorAll('[data-field="decisions"]').forEach((el,i)=>{ if(minutesData.decisions[i]!==undefined) minutesData.decisions[i]=el.innerText.trim(); });
+    document.querySelectorAll('[data-field="disc-topic"]').forEach((el,i)=>{ if(minutesData.discussions[i]) minutesData.discussions[i].topic=el.innerText.trim(); });
+    document.querySelectorAll('[data-field="disc-content"]').forEach((el,i)=>{ if(minutesData.discussions[i]) minutesData.discussions[i].content=el.innerText.trim(); });
+    document.querySelectorAll('[data-field="task"]').forEach((el,i)=>{ if(minutesData.action_items[i]) minutesData.action_items[i].task=el.innerText.trim(); });
+    document.querySelectorAll('[data-field="owner"]').forEach((el,i)=>{ if(minutesData.action_items[i]) minutesData.action_items[i].owner=el.innerText.trim(); });
+    document.querySelectorAll('[data-field="due"]').forEach((el,i)=>{ if(minutesData.action_items[i]) minutesData.action_items[i].due=el.innerText.trim(); });
   }
 
   async function downloadDocx() {
     if(!minutesData) return;
+    syncMinutesData();
     const {Document,Packer,Paragraph,TextRun,HeadingLevel,AlignmentType,LevelFormat,Table,TableRow,TableCell,WidthType,ShadingType,BorderStyle}=docx;
     const m=minutesData, font="맑은 고딕";
     const border={style:BorderStyle.SINGLE,size:1,color:"CCCCCC"};
