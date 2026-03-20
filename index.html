@@ -133,7 +133,8 @@
         <div class="section"><div class="section-title">✅ 결정사항</div><div id="r-decisions"></div></div>
         <div class="section">
           <div class="section-title">🎯 액션아이템</div>
-          <table class="action-table"><thead><tr><th style="width:40px;text-align:center"><input type="checkbox" id="checkAll" onclick="toggleAllChecks(this)" title="전체선택"></th><th>할일</th><th>담당자</th><th>기한</th></tr></thead><tbody id="r-actions"></tbody></table>
+          <table class="action-table"><thead><tr><th style="width:40px;text-align:center"><input type="checkbox" id="checkAll" onclick="toggleAllChecks(this)" title="전체선택"></th><th>할일</th><th>담당자</th><th>기한</th><th style="width:40px"></th></tr></thead><tbody id="r-actions"></tbody></table>
+          <button class="btn btn-add-action" onclick="addActionItem()" style="margin-top:8px;font-size:13px;padding:6px 12px;">+ 액션아이템 추가</button>
         </div>
       </div>
       <div class="tab-content" id="tab-transcript">
@@ -292,6 +293,24 @@
     document.querySelectorAll('.action-check').forEach(cb => cb.checked = el.checked);
   }
 
+  function addActionItem() {
+    if(!minutesData) return;
+    syncMinutesData();
+    minutesData.action_items.push({task:'새 액션아이템', owner:'미정', due:'미정'});
+    renderMinutes(minutesData);
+    // 새로 추가된 행 포커스
+    const rows = document.querySelectorAll('[data-field="task"]');
+    const last = rows[rows.length-1];
+    if(last) { last.focus(); document.execCommand('selectAll', false, null); }
+  }
+
+  function deleteActionItem(index) {
+    if(!minutesData) return;
+    syncMinutesData();
+    minutesData.action_items.splice(index, 1);
+    renderMinutes(minutesData);
+  }
+
   async function addToCalendar() {
     if(!minutesData) return;
     syncMinutesData();
@@ -384,11 +403,12 @@
       `<div class="list-item"><span contenteditable="true" data-field="decisions" data-index="${i}">${d}</span></div>`
     ).join('')||'<div class="list-item" style="color:var(--text-muted)">없음</div>';
     document.getElementById('r-actions').innerHTML=(m.action_items||[]).map((a,i)=>
-      `<tr>
+      `<tr id="action-row-${i}">
         <td style="text-align:center"><input type="checkbox" class="action-check" data-index="${i}" checked></td>
         <td><span contenteditable="true" data-field="task" data-index="${i}">${a.task||''}</span></td>
         <td><span contenteditable="true" data-field="owner" data-index="${i}">${a.owner||'미정'}</span></td>
         <td><span contenteditable="true" data-field="due" data-index="${i}">${a.due||'미정'}</span></td>
+        <td style="text-align:center"><button onclick="deleteActionItem(${i})" style="background:none;border:none;cursor:pointer;color:#c0392b;font-size:16px;" title="삭제">×</button></td>
       </tr>`
     ).join('');
     document.getElementById('checkAll').checked=true;
