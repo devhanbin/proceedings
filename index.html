@@ -74,6 +74,7 @@
     .action-table tr:nth-child(even) td { background: var(--bg); }
     .transcript-box { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 1rem; font-size: 13px; color: var(--text-secondary); line-height: 1.8; max-height: 200px; overflow-y: auto; white-space: pre-wrap; }
     .actions-row { display: flex; gap: 8px; margin-top: 1rem; flex-wrap: wrap; }
+    .calendar-status { display: none; margin-top: 10px; font-size: 13px; color: #1a6b3c; }
   </style>
 </head>
 <body>
@@ -97,12 +98,8 @@
     </div>
   </div>
 
-  <!-- 실시간 속기록 -->
   <div class="card live-card" id="live-transcript-card">
-    <div class="card-label">
-      📝 실시간 속기록
-      <span class="chunk-badge" id="chunkBadge">0 구간</span>
-    </div>
+    <div class="card-label">📝 실시간 속기록 <span class="chunk-badge" id="chunkBadge">0 구간</span></div>
     <div class="live-transcript" id="live-transcript">녹음이 시작되면 10분마다 속기록이 여기에 쌓입니다...</div>
   </div>
 
@@ -141,7 +138,7 @@
         <button class="btn btn-calendar" id="calendarBtn" onclick="addToCalendar()">📅 Google Calendar 등록</button>
         <button class="btn" onclick="resetAll()">🔄 새 회의</button>
       </div>
-      <div id="calendarStatus" style="display:none;margin-top:10px;font-size:13px;color:#1a6b3c;"></div>
+      <div class="calendar-status" id="calendarStatus"></div>
     </div>
   </div>
 </div>
@@ -149,16 +146,14 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/docx/8.5.0/docx.umd.min.js"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
-  const GROQ_API_KEY = "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";
-  const GOOGLE_CLIENT_ID = "468678113505-noaosp7aqdmq6rhp3hsls5adbjlcdq5l.apps.googleusercontent.com";
-  const GROQ_WHISPER = 'https://api.groq.com/openai/v1/audio/transcriptions';
-  const GROQ_CHAT = 'https://api.groq.com/openai/v1/chat/completions';
-  const CHUNK_INTERVAL_MS = 10 * 60 * 1000; // 10분
+  const BACKEND = 'https://proceedings-api.onrender.com'; // 배포 후 변경
+  const GOOGLE_CLIENT_ID = '여기에_클라이언트ID_입력';
+  const CHUNK_INTERVAL_MS = 10 * 60 * 1000;
 
   let mediaRecorder=null, audioChunks=[], isRecording=false;
   let timerInterval=null, chunkInterval=null, seconds=0;
   let minutesData=null, mimeType='audio/webm';
-  let fullTranscript='', chunkCount=0;
+  let fullTranscript='', chunkCount=0, googleAccessToken=null;
 
   function switchTab(tab) {
     document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',(i===0)===(tab==='minutes')));
@@ -184,12 +179,10 @@
     try {
       const formData = new FormData();
       formData.append('file', blob, 'chunk.webm');
-      formData.append('model', 'whisper-large-v3-turbo');
-      formData.append('response_format', 'text');
-      formData.append('language', 'ko');
-      const res = await fetch(GROQ_WHISPER, {method:'POST', headers:{'Authorization':`Bearer ${GROQ_API_KEY}`}, body: formData});
-      if(!res.ok) { console.warn('청크 변환 실패:', await res.text()); return; }
-      const text = (await res.text()).trim();
+      const res = await fetch(`${BACKEND}/transcribe`, {method:'POST', body: formData});
+      if(!res.ok) { console.warn('청크 변환 실패'); return; }
+      const data = await res.json();
+      const text = (data.transcript || '').trim();
       if(text) {
         fullTranscript += (fullTranscript ? '\n' : '') + text;
         chunkCount++;
@@ -229,8 +222,7 @@
   }
 
   async function stopRecording() {
-    clearInterval(timerInterval);
-    clearInterval(chunkInterval);
+    clearInterval(timerInterval); clearInterval(chunkInterval);
     isRecording=false;
     document.getElementById('recordBtn').disabled=true;
     document.getElementById('recordBtn').textContent='⏳';
@@ -254,12 +246,14 @@
     if(!transcript.trim()) { showError('음성이 인식되지 않았습니다. 다시 시도해주세요.'); return; }
     showStatus('📝 회의록을 작성하는 중...');
     try {
-      const prompt = `다음은 회의 음성을 텍스트로 변환한 내용입니다.\n\n${transcript}\n\n위 내용을 바탕으로 아래 형식의 회의록을 작성해주세요. 반드시 JSON 형식으로만 응답하고 다른 텍스트는 포함하지 마세요.\n\n{"title":"회의 제목","date":"일시 (언급된 경우, 없으면 미기재)","attendees":["참석자1"],"agenda":["안건1"],"discussions":[{"topic":"주제","content":"논의 내용"}],"decisions":["결정사항1"],"action_items":[{"task":"할일","owner":"담당자","due":"기한"}],"next_meeting":"다음 회의 일정 (없으면 미정)"}`;
-      const cRes = await fetch(GROQ_CHAT, {method:'POST', headers:{'Authorization':`Bearer ${GROQ_API_KEY}`,'Content-Type':'application/json'}, body: JSON.stringify({model:'llama-3.3-70b-versatile', messages:[{role:'user',content:prompt}], max_tokens:2048})});
-      if(!cRes.ok) throw new Error(`회의록 생성 실패: ${await cRes.text()}`);
-      const cData = await cRes.json();
-      let content = cData.choices[0].message.content.trim().replace(/```json|```/g,'').trim();
-      minutesData = JSON.parse(content);
+      const res = await fetch(`${BACKEND}/generate-minutes`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({transcript})
+      });
+      if(!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      minutesData = data.minutes;
       renderMinutes(minutesData);
       document.getElementById('r-transcript').textContent = transcript;
       document.getElementById('statusBox').style.display='none';
@@ -270,6 +264,63 @@
       showError('오류: '+e.message);
       document.getElementById('statusBox').style.display='none';
       document.getElementById('recordStatus').textContent='오류가 발생했습니다. 다시 시도해주세요.';
+    }
+  }
+
+  // Google Calendar 연동
+  function getGoogleToken() {
+    return new Promise((resolve, reject) => {
+      const client = google.accounts.oauth2.initTokenClient({
+        client_id: GOOGLE_CLIENT_ID,
+        scope: 'https://www.googleapis.com/auth/calendar.events',
+        callback: (resp) => {
+          if(resp.error) reject(resp.error);
+          else { googleAccessToken = resp.access_token; resolve(resp.access_token); }
+        }
+      });
+      client.requestAccessToken();
+    });
+  }
+
+  async function addToCalendar() {
+    if(!minutesData) return;
+    const items = minutesData.action_items || [];
+    if(items.length === 0) { alert('액션아이템이 없습니다.'); return; }
+    const btn = document.getElementById('calendarBtn');
+    btn.disabled=true; btn.textContent='⏳ 로그인 중...';
+    try {
+      const token = await getGoogleToken();
+      btn.textContent='⏳ 등록 중...';
+      let success=0;
+      for(const item of items) {
+        let startDate = new Date();
+        startDate.setDate(startDate.getDate()+1);
+        if(item.due && item.due !== '미정') {
+          const parsed = new Date(item.due);
+          if(!isNaN(parsed)) startDate = parsed;
+        }
+        const endDate = new Date(startDate);
+        endDate.setHours(endDate.getHours()+1);
+        const event = {
+          summary: `[회의 액션] ${item.task}`,
+          description: `담당자: ${item.owner||'미정'}\n회의: ${minutesData.title||''}`,
+          start: {dateTime: startDate.toISOString(), timeZone:'Asia/Seoul'},
+          end: {dateTime: endDate.toISOString(), timeZone:'Asia/Seoul'},
+        };
+        const res = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+          method:'POST',
+          headers:{'Authorization':`Bearer ${token}`,'Content-Type':'application/json'},
+          body:JSON.stringify(event)
+        });
+        if(res.ok) success++;
+      }
+      const statusEl = document.getElementById('calendarStatus');
+      statusEl.style.display='block';
+      statusEl.textContent=`✅ ${success}개 액션아이템이 Google Calendar에 등록되었습니다!`;
+      btn.textContent='✅ 등록 완료';
+    } catch(e) {
+      alert('Calendar 등록 실패: '+e);
+      btn.disabled=false; btn.textContent='📅 Google Calendar 등록';
     }
   }
 
@@ -309,83 +360,12 @@
     if(m.agenda?.length){children.push(sec('📋 안건'));m.agenda.forEach(a=>children.push(bul(a)));children.push(new Paragraph({children:[]}));}
     if(m.discussions?.length){children.push(sec('💬 논의 내용'));m.discussions.forEach(d=>{children.push(new Paragraph({children:[new TextRun({text:d.topic,bold:true,size:22,font})]}));children.push(new Paragraph({children:[new TextRun({text:d.content,size:22,font})]}));children.push(new Paragraph({children:[]}));});}
     if(m.decisions?.length){children.push(sec('✅ 결정사항'));m.decisions.forEach(d=>children.push(bul(d)));children.push(new Paragraph({children:[]}));}
-    if(m.action_items?.length){children.push(sec('🎯 액션아이템'));children.push(new Table({width:{size:9026,type:WidthType.DXA},columnWidths:[4000,2500,2526],rows:[new TableRow({children:[cell('할일',true,4000),cell('담당자',true,2500),cell('기한',true,2526)]}), ...m.action_items.map(a=>new TableRow({children:[cell(a.task,false,4000),cell(a.owner||'미정',false,2500),cell(a.due||'미정',false,2526)]}))]}))}
+    if(m.action_items?.length){children.push(sec('🎯 액션아이템'));children.push(new Table({width:{size:9026,type:WidthType.DXA},columnWidths:[4000,2500,2526],rows:[new TableRow({children:[cell('할일',true,4000),cell('담당자',true,2500),cell('기한',true,2526)]}), ...m.action_items.map(a=>new TableRow({children:[cell(a.task,false,4000),cell(a.owner||'미정',false,2500),cell(a.due||'미정',false,2526)]}))]}));}
     const doc2=new Document({numbering:{config:[{reference:"bullets",levels:[{level:0,format:LevelFormat.BULLET,text:"•",alignment:AlignmentType.LEFT,style:{paragraph:{indent:{left:720,hanging:360}}}}]}]},styles:{default:{document:{run:{font,size:22}}},paragraphStyles:[{id:"Heading2",name:"Heading 2",basedOn:"Normal",next:"Normal",quickFormat:true,run:{size:26,bold:true,font,color:"2E75B6"},paragraph:{spacing:{before:200,after:100},outlineLevel:1}}]},sections:[{properties:{page:{size:{width:11906,height:16838},margin:{top:1440,right:1440,bottom:1440,left:1440}}},children}]});
     const buffer=await Packer.toBlob(doc2);
     const url=URL.createObjectURL(buffer);
     const a=document.createElement('a');
     a.href=url; a.download='회의록.docx'; a.click(); URL.revokeObjectURL(url);
-  }
-
-  // Google Calendar 연동
-  let googleAccessToken = null;
-
-  function getGoogleToken() {
-    return new Promise((resolve, reject) => {
-      const client = google.accounts.oauth2.initTokenClient({
-        client_id: GOOGLE_CLIENT_ID,
-        scope: 'https://www.googleapis.com/auth/calendar.events',
-        callback: (resp) => {
-          if(resp.error) reject(resp.error);
-          else { googleAccessToken = resp.access_token; resolve(resp.access_token); }
-        }
-      });
-      client.requestAccessToken();
-    });
-  }
-
-  async function addToCalendar() {
-    if(!minutesData) return;
-    const items = minutesData.action_items || [];
-    if(items.length === 0) { alert('액션아이템이 없습니다.'); return; }
-
-    const btn = document.getElementById('calendarBtn');
-    btn.disabled = true;
-    btn.textContent = '⏳ 로그인 중...';
-
-    try {
-      const token = await getGoogleToken();
-      btn.textContent = '⏳ 등록 중...';
-
-      let success = 0;
-      for(const item of items) {
-        // 기한이 있으면 해당 날짜, 없으면 내일
-        let startDate = new Date();
-        startDate.setDate(startDate.getDate() + 1);
-
-        if(item.due && item.due !== '미정') {
-          const parsed = new Date(item.due);
-          if(!isNaN(parsed)) startDate = parsed;
-        }
-
-        const endDate = new Date(startDate);
-        endDate.setHours(endDate.getHours() + 1);
-
-        const event = {
-          summary: `[회의 액션] ${item.task}`,
-          description: `담당자: ${item.owner || '미정'}\n회의록: ${minutesData.title || ''}`,
-          start: { dateTime: startDate.toISOString(), timeZone: 'Asia/Seoul' },
-          end: { dateTime: endDate.toISOString(), timeZone: 'Asia/Seoul' },
-        };
-
-        const res = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify(event)
-        });
-
-        if(res.ok) success++;
-      }
-
-      const statusEl = document.getElementById('calendarStatus');
-      statusEl.style.display = 'block';
-      statusEl.textContent = `✅ ${success}개 액션아이템이 Google Calendar에 등록되었습니다!`;
-      btn.textContent = '✅ 등록 완료';
-    } catch(e) {
-      alert('Calendar 등록 실패: ' + e);
-      btn.disabled = false;
-      btn.textContent = '📅 Google Calendar 등록';
-    }
   }
 
   function resetAll(){
@@ -399,7 +379,7 @@
     document.getElementById('errorBox').style.display='none';
     document.getElementById('statusBox').style.display='none';
     document.getElementById('calendarStatus').style.display='none';
-    const btn = document.getElementById('calendarBtn');
+    const btn=document.getElementById('calendarBtn');
     btn.disabled=false; btn.textContent='📅 Google Calendar 등록';
   }
 </script>
