@@ -374,7 +374,8 @@
       const statusEl = document.getElementById('calendarStatus');
       statusEl.style.display='block';
       statusEl.textContent=`✅ ${success}개 액션아이템이 Google Calendar에 등록되었습니다!`;
-      btn.textContent='✅ 등록 완료';
+      btn.disabled=false;
+      btn.textContent='📅 Google Calendar 등록';
     } catch(e) {
       alert('Calendar 등록 실패: '+e);
       btn.disabled=false; btn.textContent='📅 Google Calendar 등록';
