@@ -44,7 +44,7 @@ async def transcribe(file: UploadFile = File(...)):
             GROQ_WHISPER_URL,
             headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
             files={"file": (file.filename, file_bytes, mime)},
-            data={"model": "whisper-large-v3-turbo", "response_format": "text", "language": "ko"},
+            data={"model": "whisper-large-v3-turbo", "response_format": "text"},
         )
     if response.status_code != 200:
         raise HTTPException(status_code=500, detail=f"음성인식 실패: {response.text}")
