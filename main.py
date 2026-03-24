@@ -1,6 +1,7 @@
 import os
 import json
 import httpx
+import traceback
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -47,6 +48,7 @@ async def transcribe(file: UploadFile = File(...)):
             data={"model": "whisper-large-v3-turbo", "response_format": "text"},
         )
     if response.status_code != 200:
+        print(f"Whisper 오류: {response.status_code} {response.text}")
         raise HTTPException(status_code=500, detail=f"음성인식 실패: {response.text}")
 
     return {"transcript": response.text.strip()}
