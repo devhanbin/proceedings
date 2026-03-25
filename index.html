@@ -185,7 +185,8 @@
     if(blob.size < 5000) return;
     try {
       const formData = new FormData();
-      formData.append('file', blob, 'chunk.webm');
+      // Groq Whisper는 webm을 mp4로 인식시켜야 함
+      formData.append('file', blob, 'chunk.mp4');
       const res = await fetch(`${BACKEND}/transcribe`, {method:'POST', body: formData});
       if(!res.ok) { console.warn('청크 변환 실패'); return; }
       const data = await res.json();
