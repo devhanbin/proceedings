@@ -5,7 +5,6 @@ import traceback
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 load_dotenv()
@@ -22,10 +21,30 @@ app.add_middleware(
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_WHISPER_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+
+
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+
+
+@app.get("/config")
+async def get_config():
+    return {
+        "google_client_id": GOOGLE_CLIENT_ID
+    }
+
+
+    return {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+    }
 
 
 # ─────────────────────────────────────────
-# 음성 → 텍스트 변환 (청크 단위)
+# 음성 → 텍스트 변환
 # ─────────────────────────────────────────
 @app.post("/transcribe")
 async def transcribe(file: UploadFile = File(...)):
@@ -36,22 +55,28 @@ async def transcribe(file: UploadFile = File(...)):
     if len(file_bytes) > 25 * 1024 * 1024:
         raise HTTPException(status_code=422, detail="파일이 너무 큽니다. 25MB 이하만 지원합니다.")
 
-    ext = (file.filename or "audio.webm").rsplit(".", 1)[-1].lower()
-    mime_map = {"mp3": "audio/mpeg", "m4a": "audio/mp4", "wav": "audio/wav", "webm": "audio/webm", "ogg": "audio/ogg"}
-    mime = mime_map.get(ext, "audio/webm")
+    ext = (file.filename or "audio.mp4").rsplit(".", 1)[-1].lower()
+    mime_map = {"mp3": "audio/mpeg", "m4a": "audio/mp4", "wav": "audio/wav", "webm": "audio/webm", "ogg": "audio/ogg", "mp4": "audio/mp4"}
+    mime = mime_map.get(ext, "audio/mp4")
 
-    async with httpx.AsyncClient(timeout=120) as client:
-        response = await client.post(
-            GROQ_WHISPER_URL,
-            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
-            files={"file": (file.filename, file_bytes, mime)},
-            data={"model": "whisper-large-v3-turbo", "response_format": "text"},
-        )
-    if response.status_code != 200:
-        print(f"Whisper 오류: {response.status_code} {response.text}")
-        raise HTTPException(status_code=500, detail=f"음성인식 실패: {response.text}")
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            response = await client.post(
+                GROQ_WHISPER_URL,
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+                files={"file": (file.filename, file_bytes, mime)},
+                data={"model": "whisper-large-v3-turbo", "response_format": "text"},
+            )
+        if response.status_code != 200:
+            print(f"Whisper 오류: {response.status_code} {response.text}")
+            raise HTTPException(status_code=500, detail=f"음성인식 실패: {response.text}")
 
-    return {"transcript": response.text.strip()}
+        return {"transcript": response.text.strip()}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ─────────────────────────────────────────
@@ -92,6 +117,104 @@ async def generate_minutes(req: MinutesRequest):
         raise HTTPException(status_code=500, detail="회의록 파싱 실패. 다시 시도해주세요.")
 
     return {"minutes": minutes}
+
+
+# ─────────────────────────────────────────
+# 프로젝트 CRUD
+# ─────────────────────────────────────────
+@app.get("/projects")
+async def get_projects():
+    async with httpx.AsyncClient() as client:
+        res = await client.get(
+            f"{SUPABASE_URL}/rest/v1/projects?order=created_at.desc",
+            headers=supabase_headers()
+        )
+    if res.status_code != 200:
+        raise HTTPException(status_code=500, detail=res.text)
+    return res.json()
+
+
+class ProjectCreate(BaseModel):
+    name: str
+
+
+@app.post("/projects")
+async def create_project(req: ProjectCreate):
+    async with httpx.AsyncClient() as client:
+        res = await client.post(
+            f"{SUPABASE_URL}/rest/v1/projects",
+            headers=supabase_headers(),
+            json={"name": req.name}
+        )
+    if res.status_code not in (200, 201):
+        raise HTTPException(status_code=500, detail=res.text)
+    return res.json()[0]
+
+
+@app.delete("/projects/{project_id}")
+async def delete_project(project_id: str):
+    async with httpx.AsyncClient() as client:
+        # 해당 프로젝트 회의록도 함께 삭제
+        await client.delete(
+            f"{SUPABASE_URL}/rest/v1/meetings?project_id=eq.{project_id}",
+            headers=supabase_headers()
+        )
+        res = await client.delete(
+            f"{SUPABASE_URL}/rest/v1/projects?id=eq.{project_id}",
+            headers=supabase_headers()
+        )
+    if res.status_code not in (200, 204):
+        raise HTTPException(status_code=500, detail=res.text)
+    return {"success": True}
+
+
+# ─────────────────────────────────────────
+# 회의록 CRUD
+# ─────────────────────────────────────────
+@app.get("/projects/{project_id}/meetings")
+async def get_meetings(project_id: str):
+    async with httpx.AsyncClient() as client:
+        res = await client.get(
+            f"{SUPABASE_URL}/rest/v1/meetings?project_id=eq.{project_id}&order=created_at.desc",
+            headers=supabase_headers()
+        )
+    if res.status_code != 200:
+        raise HTTPException(status_code=500, detail=res.text)
+    return res.json()
+
+
+class MeetingSave(BaseModel):
+    project_id: str
+    title: str
+    date: str
+    attendees: str
+    minutes_json: str
+    transcript: str
+
+
+@app.post("/meetings")
+async def save_meeting(req: MeetingSave):
+    async with httpx.AsyncClient() as client:
+        res = await client.post(
+            f"{SUPABASE_URL}/rest/v1/meetings",
+            headers=supabase_headers(),
+            json=req.model_dump()
+        )
+    if res.status_code not in (200, 201):
+        raise HTTPException(status_code=500, detail=res.text)
+    return res.json()[0]
+
+
+@app.delete("/meetings/{meeting_id}")
+async def delete_meeting(meeting_id: str):
+    async with httpx.AsyncClient() as client:
+        res = await client.delete(
+            f"{SUPABASE_URL}/rest/v1/meetings?id=eq.{meeting_id}",
+            headers=supabase_headers()
+        )
+    if res.status_code not in (200, 204):
+        raise HTTPException(status_code=500, detail=res.text)
+    return {"success": True}
 
 
 @app.get("/health")
