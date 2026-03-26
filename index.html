@@ -137,7 +137,19 @@
   </style>
 </head>
 <body>
-<div class="app">
+<!-- 로그인 화면 -->
+<div id="login-screen" style="display:flex;align-items:center;justify-content:center;min-height:100vh;background:var(--bg);">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:2.5rem;width:100%;max-width:360px;text-align:center;">
+    <div style="font-size:36px;margin-bottom:1rem;">🎙️</div>
+    <h1 style="font-size:22px;font-weight:700;margin-bottom:6px;">Proceedings</h1>
+    <p style="font-size:14px;color:var(--text-secondary);margin-bottom:2rem;">회의록 자동 정리 시스템</p>
+    <input type="password" id="loginPassword" placeholder="비밀번호를 입력하세요" style="width:100%;padding:10px 14px;font-size:14px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);color:var(--text-primary);outline:none;margin-bottom:10px;" onkeydown="if(event.key==='Enter') doLogin()" />
+    <div id="loginError" style="display:none;font-size:13px;color:var(--danger-text);margin-bottom:10px;"></div>
+    <button onclick="doLogin()" style="width:100%;padding:11px;font-size:14px;font-weight:500;background:var(--accent);color:#fff;border:none;border-radius:var(--radius-sm);cursor:pointer;">로그인</button>
+  </div>
+</div>
+
+<div class="app" id="main-app" style="display:none;">
   <!-- 사이드바 -->
   <div class="sidebar">
     <div class="sidebar-title">📁 프로젝트</div>
@@ -290,6 +302,7 @@
   const CHUNK_INTERVAL_MS = 5 * 60 * 1000;
 
   let GOOGLE_CLIENT_ID = '';
+  let userRole = null; // 'admin' | 'user'
   let currentProjectId = null, currentProjectName = '';
   let cachedMeetings = [];
   let mediaRecorder=null, audioChunks=[], isRecording=false;
@@ -776,6 +789,40 @@
     btn.disabled=false; btn.textContent='📅 Google Calendar 등록';
   }
 
+  async function doLogin() {
+    const pw = document.getElementById('loginPassword').value;
+    const errEl = document.getElementById('loginError');
+    try {
+      const res = await fetch(`${BACKEND}/login`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({password: pw})
+      });
+      if(!res.ok) { errEl.style.display='block'; errEl.textContent='비밀번호가 올바르지 않습니다.'; return; }
+      const data = await res.json();
+      userRole = data.role;
+      sessionStorage.setItem('role', userRole);
+      document.getElementById('login-screen').style.display='none';
+      document.getElementById('main-app').style.display='flex';
+      applyRoleUI();
+      await init();
+    } catch(e) {
+      errEl.style.display='block'; errEl.textContent='서버 오류가 발생했습니다.';
+    }
+  }
+
+  function applyRoleUI() {
+    // 관리자만 삭제 버튼 보이게
+    const style = document.createElement('style');
+    if(userRole !== 'admin') {
+      style.textContent = '.project-delete, .meeting-item-delete { display: none !important; } .add-project-row { display: none !important; }';
+    }
+    document.head.appendChild(style);
+    // 사이드바 상단에 역할 표시
+    const sidebar = document.querySelector('.sidebar-title');
+    sidebar.innerHTML = `📁 프로젝트 <span style="font-size:11px;background:${userRole==='admin'?'#c0392b':'var(--accent)'};color:#fff;padding:2px 7px;border-radius:10px;margin-left:4px;">${userRole==='admin'?'관리자':'사용자'}</span>`;
+  }
+
   // 초기화
   async function init() {
     try {
@@ -785,7 +832,16 @@
     } catch(e) { console.warn('config 로드 실패:', e); }
     await loadProjects();
   }
-  init();
+
+  // 로그인 상태 확인 (세션 유지)
+  const savedRole = sessionStorage.getItem('role');
+  if(savedRole) {
+    userRole = savedRole;
+    document.getElementById('login-screen').style.display='none';
+    document.getElementById('main-app').style.display='flex';
+    applyRoleUI();
+    init();
+  }
 </script>
 </body>
 </html>

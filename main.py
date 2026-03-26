@@ -24,6 +24,8 @@ GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+USER_PASSWORD = os.environ.get("USER_PASSWORD", "")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 
 
 def supabase_headers():
@@ -38,6 +40,20 @@ def supabase_headers():
 @app.get("/config")
 async def get_config():
     return {"google_client_id": GOOGLE_CLIENT_ID}
+
+
+class LoginRequest(BaseModel):
+    password: str
+
+
+@app.post("/login")
+async def login(req: LoginRequest):
+    if req.password == ADMIN_PASSWORD:
+        return {"role": "admin"}
+    elif req.password == USER_PASSWORD:
+        return {"role": "user"}
+    else:
+        raise HTTPException(status_code=401, detail="비밀번호가 올바르지 않습니다.")
 
 
 # ─── 음성 → 텍스트 ───
