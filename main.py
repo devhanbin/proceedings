@@ -155,6 +155,7 @@ async def create_project(req: ProjectCreate):
             headers=supabase_headers(),
             json={"name": req.name}
         )
+    print(f"Supabase POST /projects: {res.status_code} {res.text}")
     if res.status_code not in (200, 201):
         raise HTTPException(status_code=500, detail=res.text)
     return res.json()[0]
