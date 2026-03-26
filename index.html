@@ -459,8 +459,10 @@
         .then(r=>r.json())
         .then(data=>{
           player.src = data.url;
-          document.getElementById('d-audio-download').href = data.url;
-          document.getElementById('d-audio-download').download = filename;
+          const dlBtn = document.getElementById('d-audio-download');
+          dlBtn.href = data.url;
+          dlBtn.target = '_blank'; // 새 탭으로 열기 → 스트리밍 다운로드
+          dlBtn.removeAttribute('download');
         })
         .catch(e=>console.warn('녹음 URL 발급 실패:', e));
     } else {
