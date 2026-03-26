@@ -164,18 +164,45 @@ async def generate_minutes(req: MinutesRequest):
 # ─────────────────────────────────────────
 @app.post("/upload-recording")
 async def upload_recording(file: UploadFile = File(...)):
+    import tempfile, subprocess
     file_bytes = await file.read()
     filename = file.filename or "recording.webm"
     print(f"[upload-recording] 파일: {filename}, {len(file_bytes)} bytes")
 
     try:
+        # ffmpeg으로 duration 메타데이터 추가 (seek 가능하게)
+        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp_in:
+            tmp_in.write(file_bytes)
+            tmp_in_path = tmp_in.name
+
+        tmp_out_path = tmp_in_path.replace(".webm", "_fixed.webm")
+
+        result = subprocess.run(
+            ["ffmpeg", "-i", tmp_in_path, "-c", "copy", "-y", tmp_out_path],
+            capture_output=True, timeout=60
+        )
+        print(f"[ffmpeg] returncode: {result.returncode}")
+
+        if result.returncode == 0:
+            with open(tmp_out_path, "rb") as f:
+                file_bytes = f.read()
+            print(f"[ffmpeg] 변환 완료: {len(file_bytes)} bytes")
+        else:
+            print(f"[ffmpeg] 실패, 원본 사용: {result.stderr.decode()[:200]}")
+
+        # 임시 파일 정리
+        import os as _os
+        for p in [tmp_in_path, tmp_out_path]:
+            try: _os.remove(p)
+            except: pass
+
         async with httpx.AsyncClient(timeout=120) as client:
             res = await client.post(
                 f"{SUPABASE_URL}/storage/v1/object/recordings/{filename}",
                 headers={
                     "apikey": SUPABASE_KEY,
                     "Authorization": f"Bearer {SUPABASE_KEY}",
-                    "Content-Type": file.content_type or "audio/webm",
+                    "Content-Type": "audio/webm",
                 },
                 content=file_bytes,
             )
@@ -184,6 +211,32 @@ async def upload_recording(file: UploadFile = File(...)):
             raise HTTPException(status_code=500, detail=f"업로드 실패: {res.text}")
         recording_url = f"{SUPABASE_URL}/storage/v1/object/recordings/{filename}"
         return {"url": recording_url}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/recording-url")
+async def get_recording_url(path: str):
+    print(f"[recording-url] path: {path}")
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            res = await client.post(
+                f"{SUPABASE_URL}/storage/v1/object/sign/recordings/{path}",
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={"expiresIn": 3600},
+            )
+        log("Supabase Signed URL", res.status_code, res.text)
+        if res.status_code != 200:
+            raise HTTPException(status_code=500, detail=res.text)
+        signed_url = res.json().get("signedURL", "")
+        return {"url": f"{SUPABASE_URL}/storage/v1{signed_url}"}
     except HTTPException:
         raise
     except Exception as e:
