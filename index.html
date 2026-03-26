@@ -291,6 +291,7 @@
 
   let GOOGLE_CLIENT_ID = '';
   let currentProjectId = null, currentProjectName = '';
+  let cachedMeetings = [];
   let mediaRecorder=null, audioChunks=[], isRecording=false;
   let timerInterval=null, chunkInterval=null, seconds=0;
   let minutesData=null, mimeType='audio/webm';
@@ -316,9 +317,24 @@
     }
     list.innerHTML = projects.map(p => `
       <div class="project-item ${p.id===currentProjectId?'active':''}" onclick="selectProject('${p.id}','${p.name.replace(/'/g,"\\'")}')">
-        <span class="project-item-name">📁 ${p.name}</span>
+        <span class="project-item-name" ondblclick="event.stopPropagation();editProjectName('${p.id}','${p.name.replace(/'/g,"\\'")}')">📁 ${p.name}</span>
         <button class="project-delete" onclick="event.stopPropagation();deleteProject('${p.id}')" title="삭제">×</button>
       </div>`).join('');
+  }
+
+  async function editProjectName(id, currentName) {
+    const newName = prompt('프로젝트 이름을 수정하세요:', currentName);
+    if(!newName || newName.trim() === currentName) return;
+    await fetch(`${BACKEND}/projects/${id}`, {
+      method:'PATCH',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name: newName.trim()})
+    });
+    if(currentProjectId === id) {
+      currentProjectName = newName.trim();
+      document.getElementById('currentProjectName').textContent = newName.trim();
+    }
+    await loadProjects();
   }
 
   async function addProject() {
@@ -337,6 +353,21 @@
     await loadProjects();
   }
 
+  async function editProjectName(id, currentName) {
+    const newName = prompt('프로젝트 이름을 입력하세요:', currentName);
+    if(!newName || newName.trim() === currentName) return;
+    await fetch(`${BACKEND}/projects/${id}`, {
+      method:'PATCH',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name: newName.trim()})
+    });
+    if(currentProjectId === id) {
+      currentProjectName = newName.trim();
+      document.getElementById('currentProjectName').textContent = newName.trim();
+    }
+    await loadProjects();
+  }
+
   async function selectProject(id, name) {
     currentProjectId = id;
     currentProjectName = name;
@@ -349,13 +380,14 @@
   // ─── 회의록 목록 ───
   async function loadMeetings(projectId) {
     const res = await fetch(`${BACKEND}/projects/${projectId}/meetings`);
-    const meetings = await res.json();
+    cachedMeetings = await res.json();
+    console.log('meetings:', JSON.stringify(cachedMeetings.slice(0,1)));
     const list = document.getElementById('meetingList');
-    if(meetings.length === 0) {
+    if(cachedMeetings.length === 0) {
       list.innerHTML = '<div class="empty-state"><p>아직 회의록이 없어요</p><small>새 회의 시작 버튼을 눌러보세요</small></div>';
       return;
     }
-    list.innerHTML = meetings.map(m => `
+    list.innerHTML = cachedMeetings.map(m => `
       <div class="meeting-item" onclick="showDetail('${m.id}')">
         <div class="meeting-item-info">
           <div class="meeting-item-title">${m.title || '제목 없음'}</div>
@@ -371,12 +403,12 @@
     await loadMeetings(currentProjectId);
   }
 
-  async function showDetail(id) {
-    const res = await fetch(`${BACKEND}/projects/${currentProjectId}/meetings`);
-    const meetings = await res.json();
-    const meeting = meetings.find(m => m.id === id);
+  function showDetail(id) {
+    const meeting = cachedMeetings.find(m => m.id === id);
     if(!meeting) return;
-    detailMinutesData = JSON.parse(meeting.minutes_json);
+    try {
+      detailMinutesData = JSON.parse(meeting.minutes_json);
+    } catch(e) { detailMinutesData = {}; }
     document.getElementById('detail-title').textContent = meeting.title || '제목 없음';
     renderDetail(detailMinutesData);
     document.getElementById('d-transcript').textContent = meeting.transcript || '';
