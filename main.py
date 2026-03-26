@@ -98,21 +98,28 @@ async def generate_minutes(req: MinutesRequest):
     if not GROQ_API_KEY:
         raise HTTPException(status_code=500, detail="GROQ_API_KEY가 설정되지 않았습니다.")
     prompt = f"""다음은 회의 음성을 텍스트로 변환한 내용입니다.\n\n{req.transcript}\n\n위 내용을 바탕으로 아래 형식의 회의록을 작성해주세요. 반드시 JSON 형식으로만 응답하고 다른 텍스트는 포함하지 마세요.\n\n{{"title":"회의 제목","date":"일시 (언급된 경우, 없으면 미기재)","attendees":["참석자1"],"agenda":["안건1"],"discussions":[{{"topic":"주제","content":"논의 내용"}}],"decisions":["결정사항1"],"action_items":[{{"task":"할일","owner":"담당자","due":"기한"}}],"next_meeting":"다음 회의 일정 (없으면 미정)"}}"""
-    async with httpx.AsyncClient(timeout=60) as client:
-        response = await client.post(
-            GROQ_CHAT_URL,
-            headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-            json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}], "max_tokens": 2048},
-        )
-    if response.status_code != 200:
-        raise HTTPException(status_code=500, detail=f"회의록 생성 실패: {response.text}")
-    content = response.json()["choices"][0]["message"]["content"].strip()
-    content = content.replace("```json", "").replace("```", "").strip()
     try:
-        minutes = json.loads(content)
-    except Exception:
-        raise HTTPException(status_code=500, detail="회의록 파싱 실패. 다시 시도해주세요.")
-    return {"minutes": minutes}
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.post(
+                GROQ_CHAT_URL,
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+                json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}], "max_tokens": 2048},
+            )
+        print(f"Groq 응답: {response.status_code} {response.text[:200]}")
+        if response.status_code != 200:
+            raise HTTPException(status_code=500, detail=f"회의록 생성 실패: {response.text}")
+        content = response.json()["choices"][0]["message"]["content"].strip()
+        content = content.replace("```json", "").replace("```", "").strip()
+        try:
+            minutes = json.loads(content)
+        except Exception:
+            raise HTTPException(status_code=500, detail="회의록 파싱 실패. 다시 시도해주세요.")
+        return {"minutes": minutes}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ─── 프로젝트 CRUD ───
