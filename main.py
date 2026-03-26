@@ -28,6 +28,15 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 
 
+def supabase_headers():
+    return {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+    }
+
+
 @app.get("/config")
 async def get_config():
     return {
