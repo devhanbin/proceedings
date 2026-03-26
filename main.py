@@ -256,6 +256,10 @@ async def get_recording_url(path: str):
     title: str
 
 
+class MeetingUpdate(BaseModel):
+    title: str
+
+
 @app.patch("/meetings/{meeting_id}")
 async def update_meeting(meeting_id: str, req: MeetingUpdate):
     async with httpx.AsyncClient() as client:
