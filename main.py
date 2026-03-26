@@ -182,6 +182,23 @@ async def save_meeting(req: MeetingSave):
         raise HTTPException(status_code=500, detail=res.text)
     return res.json()[0]
 
+class MeetingUpdate(BaseModel):
+    title: str
+
+
+@app.patch("/meetings/{meeting_id}")
+async def update_meeting(meeting_id: str, req: MeetingUpdate):
+    async with httpx.AsyncClient() as client:
+        res = await client.patch(
+            f"{SUPABASE_URL}/rest/v1/meetings?id=eq.{meeting_id}",
+            headers=supabase_headers(),
+            json={"title": req.title}
+        )
+    if res.status_code not in (200, 204):
+        raise HTTPException(status_code=500, detail=res.text)
+    return {"success": True}
+
+
 @app.delete("/meetings/{meeting_id}")
 async def delete_meeting(meeting_id: str):
     async with httpx.AsyncClient() as client:

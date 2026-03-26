@@ -390,11 +390,22 @@
     list.innerHTML = cachedMeetings.map(m => `
       <div class="meeting-item" onclick="showDetail('${m.id}')">
         <div class="meeting-item-info">
-          <div class="meeting-item-title">${m.title || '제목 없음'}</div>
+          <div class="meeting-item-title" ondblclick="event.stopPropagation();editMeetingTitle('${m.id}','${(m.title||'').replace(/'/g,"\\'")}')">${m.title || '제목 없음'}</div>
           <div class="meeting-item-meta">${m.date || '날짜 미기재'} · ${m.attendees || '참석자 미기재'}</div>
         </div>
         <button class="meeting-item-delete" onclick="event.stopPropagation();deleteMeeting('${m.id}')" title="삭제">×</button>
       </div>`).join('');
+  }
+
+  async function editMeetingTitle(id, currentTitle) {
+    const newTitle = prompt('회의록 제목을 수정하세요:', currentTitle);
+    if(!newTitle || newTitle.trim() === currentTitle) return;
+    await fetch(`${BACKEND}/meetings/${id}`, {
+      method:'PATCH',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({title: newTitle.trim()})
+    });
+    await loadMeetings(currentProjectId);
   }
 
   async function deleteMeeting(id) {
