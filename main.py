@@ -191,7 +191,45 @@ async def upload_recording(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/recording-url")
+@app.get("/download-recording")
+async def download_recording(path: str):
+    """녹음 파일을 다운로드로 강제 제공"""
+    print(f"[download-recording] path: {path}")
+    try:
+        # Signed URL 발급
+        async with httpx.AsyncClient(timeout=30) as client:
+            sign_res = await client.post(
+                f"{SUPABASE_URL}/storage/v1/object/sign/recordings/{path}",
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={"expiresIn": 300},
+            )
+        if sign_res.status_code != 200:
+            raise HTTPException(status_code=500, detail=sign_res.text)
+
+        signed_url = f"{SUPABASE_URL}/storage/v1{sign_res.json().get('signedURL', '')}"
+
+        # 파일 스트리밍 다운로드
+        async with httpx.AsyncClient(timeout=120) as client:
+            file_res = await client.get(signed_url)
+
+        if file_res.status_code != 200:
+            raise HTTPException(status_code=500, detail="파일 다운로드 실패")
+
+        from fastapi.responses import Response
+        return Response(
+            content=file_res.content,
+            media_type="audio/webm",
+            headers={"Content-Disposition": f'attachment; filename="{path}"'}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
 async def get_recording_url(path: str):
     print(f"[recording-url] path: {path}")
     try:
@@ -343,6 +381,28 @@ async def update_meeting(meeting_id: str, req: MeetingUpdate):
 @app.delete("/meetings/{meeting_id}")
 async def delete_meeting(meeting_id: str):
     async with httpx.AsyncClient() as client:
+        # 먼저 회의록 조회해서 recording_url 확인
+        get_res = await client.get(
+            f"{SUPABASE_URL}/rest/v1/meetings?id=eq.{meeting_id}&select=recording_url",
+            headers=supabase_headers(),
+        )
+        log("Supabase GET /meetings (before delete)", get_res.status_code, get_res.text)
+
+        # recording_url 있으면 Storage에서도 삭제
+        if get_res.status_code == 200:
+            rows = get_res.json()
+            if rows and rows[0].get("recording_url"):
+                filename = rows[0]["recording_url"].split("/recordings/")[-1].split("?")[0]
+                del_res = await client.delete(
+                    f"{SUPABASE_URL}/storage/v1/object/recordings/{filename}",
+                    headers={
+                        "apikey": SUPABASE_KEY,
+                        "Authorization": f"Bearer {SUPABASE_KEY}",
+                    },
+                )
+                log("Supabase Storage DELETE", del_res.status_code, del_res.text)
+
+        # 회의록 DB 삭제
         res = await client.delete(
             f"{SUPABASE_URL}/rest/v1/meetings?id=eq.{meeting_id}",
             headers=supabase_headers(),
