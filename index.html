@@ -313,7 +313,7 @@
   let userRole = null; // 'admin' | 'user'
   let currentProjectId = null, currentProjectName = '';
   let cachedMeetings = [];
-  let mediaRecorder=null, audioChunks=[], isRecording=false;
+  let mediaRecorder=null, audioChunks=[], allAudioChunks=[], isRecording=false;
   let timerInterval=null, chunkInterval=null, seconds=0;
   let minutesData=null, mimeType='audio/webm';
   let fullTranscript='', chunkCount=0, googleAccessToken=null;
@@ -548,10 +548,10 @@
   async function startRecording() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({audio:true});
-      audioChunks=[]; fullTranscript=''; chunkCount=0;
+      audioChunks=[]; allAudioChunks=[]; fullTranscript=''; chunkCount=0;
       mimeType=MediaRecorder.isTypeSupported('audio/webm;codecs=opus')?'audio/webm;codecs=opus':'audio/webm';
       mediaRecorder=new MediaRecorder(stream,{mimeType});
-      mediaRecorder.ondataavailable=e=>{if(e.data.size>0) audioChunks.push(e.data);};
+      mediaRecorder.ondataavailable=e=>{if(e.data.size>0){ audioChunks.push(e.data); allAudioChunks.push(e.data); }};
       mediaRecorder.start(1000);
       isRecording=true; seconds=0;
       timerInterval=setInterval(updateTimer,1000);
@@ -582,8 +582,8 @@
     document.getElementById('waveform').classList.remove('active');
     await new Promise(resolve=>{mediaRecorder.onstop=resolve; mediaRecorder.stop();});
     mediaRecorder.stream.getTracks().forEach(t=>t.stop());
-    // 전체 녹음 blob 저장
-    recordingBlob = new Blob([...audioChunks], {type: mimeType});
+    // 전체 녹음 blob 저장 (청크 전송과 무관하게 전체 누적)
+    recordingBlob = new Blob(allAudioChunks, {type: mimeType});
     showStatus('🎤 마지막 구간 음성 변환 중...');
     await flushChunk();
     await generateMinutes(fullTranscript);
@@ -622,21 +622,20 @@
     try {
       // 녹음 파일 업로드
       let recording_url = '';
-      if(audioChunks.length > 0 || fullTranscript) {
+      if(recordingBlob && recordingBlob.size > 0) {
         btn.textContent='🎵 녹음 파일 업로드 중...';
         try {
-          const allChunks = new Blob(recordingBlob ? [recordingBlob] : audioChunks, {type: mimeType});
-          if(allChunks.size > 0) {
-            const filename = `${currentProjectId}_${Date.now()}.webm`;
-            const formData = new FormData();
-            formData.append('file', allChunks, filename);
-            const uploadRes = await fetch(`${BACKEND}/upload-recording`, {method:'POST', body: formData});
-            if(uploadRes.ok) {
-              const uploadData = await uploadRes.json();
-              recording_url = uploadData.url;
-            }
+          const filename = `${currentProjectId}_${Date.now()}.webm`;
+          const formData = new FormData();
+          formData.append('file', recordingBlob, filename);
+          const uploadRes = await fetch(`${BACKEND}/upload-recording`, {method:'POST', body: formData});
+          if(uploadRes.ok) {
+            const uploadData = await uploadRes.json();
+            recording_url = uploadData.url;
+          } else {
+            console.warn('녹음 업로드 실패:', await uploadRes.text());
           }
-        } catch(e) { console.warn('녹음 업로드 실패:', e); }
+        } catch(e) { console.warn('녹음 업로드 오류:', e); }
       }
 
       btn.textContent='💾 회의록 저장 중...';
@@ -825,7 +824,7 @@
   function showStatus(msg){document.getElementById('errorBox').style.display='none';document.getElementById('statusText').textContent=msg;document.getElementById('statusBox').style.display='flex';}
 
   function resetRecording(){
-    minutesData=null; seconds=0; fullTranscript=''; chunkCount=0; googleAccessToken=null; recordingBlob=null;
+    minutesData=null; seconds=0; fullTranscript=''; chunkCount=0; googleAccessToken=null; recordingBlob=null; allAudioChunks=[];
     document.getElementById('timer').textContent='00:00:00';
     document.getElementById('timer').className='timer';
     document.getElementById('recordStatus').textContent='회의 시작 버튼을 눌러 녹음을 시작하세요';
