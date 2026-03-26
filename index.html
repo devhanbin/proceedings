@@ -247,7 +247,7 @@
     <div class="view" id="view-detail">
       <div class="page-header">
         <button class="btn" onclick="showList()">← 목록으로</button>
-        <h1 id="detail-title"></h1>
+        <h1 id="detail-title" onclick="editDetailTitle()" style="cursor:pointer;" title="클릭하여 제목 수정"></h1>
       </div>
       <div class="card">
         <div class="tabs">
@@ -390,7 +390,7 @@
     list.innerHTML = cachedMeetings.map(m => `
       <div class="meeting-item" onclick="showDetail('${m.id}')">
         <div class="meeting-item-info">
-          <div class="meeting-item-title" ondblclick="event.stopPropagation();editMeetingTitle('${m.id}','${(m.title||'').replace(/'/g,"\\'")}')">${m.title || '제목 없음'}</div>
+          <div class="meeting-item-title">${m.title || '제목 없음'}</div>
           <div class="meeting-item-meta">${m.date || '날짜 미기재'} · ${m.attendees || '참석자 미기재'}</div>
         </div>
         <button class="meeting-item-delete" onclick="event.stopPropagation();deleteMeeting('${m.id}')" title="삭제">×</button>
@@ -414,9 +414,12 @@
     await loadMeetings(currentProjectId);
   }
 
+  let currentMeetingId = null;
+
   function showDetail(id) {
     const meeting = cachedMeetings.find(m => m.id === id);
     if(!meeting) return;
+    currentMeetingId = id;
     try {
       detailMinutesData = JSON.parse(meeting.minutes_json);
     } catch(e) { detailMinutesData = {}; }
@@ -424,6 +427,21 @@
     renderDetail(detailMinutesData);
     document.getElementById('d-transcript').textContent = meeting.transcript || '';
     showView('detail');
+  }
+
+  async function editDetailTitle() {
+    const currentTitle = document.getElementById('detail-title').textContent;
+    const newTitle = prompt('회의록 제목을 수정하세요:', currentTitle);
+    if(!newTitle || newTitle.trim() === currentTitle) return;
+    await fetch(`${BACKEND}/meetings/${currentMeetingId}`, {
+      method:'PATCH',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({title: newTitle.trim()})
+    });
+    document.getElementById('detail-title').textContent = newTitle.trim();
+    // 캐시 업데이트
+    const meeting = cachedMeetings.find(m => m.id === currentMeetingId);
+    if(meeting) meeting.title = newTitle.trim();
   }
 
   function renderDetail(m) {
