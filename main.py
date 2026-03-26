@@ -188,6 +188,7 @@ async def get_meetings(project_id: str):
             f"{SUPABASE_URL}/rest/v1/meetings?project_id=eq.{project_id}&order=created_at.desc",
             headers=supabase_headers()
         )
+    print(f"Supabase GET /meetings: {res.status_code} {res.text[:200]}")
     if res.status_code != 200:
         raise HTTPException(status_code=500, detail=res.text)
     return res.json()
