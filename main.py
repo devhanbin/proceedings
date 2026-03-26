@@ -39,7 +39,10 @@ def supabase_headers():
 
 @app.get("/config")
 async def get_config():
-    return {"google_client_id": GOOGLE_CLIENT_ID}
+    return {
+        "google_client_id": GOOGLE_CLIENT_ID,
+        "supabase_anon_key": SUPABASE_KEY
+    }
 
 
 class LoginRequest(BaseModel):
@@ -185,6 +188,7 @@ class MeetingSave(BaseModel):
     attendees: str
     minutes_json: str
     transcript: str
+    recording_url: str = ""
 
 @app.post("/meetings")
 async def save_meeting(req: MeetingSave):
@@ -197,6 +201,29 @@ async def save_meeting(req: MeetingSave):
     if res.status_code not in (200, 201):
         raise HTTPException(status_code=500, detail=res.text)
     return res.json()[0]
+
+
+@app.post("/upload-recording")
+async def upload_recording(file: UploadFile = File(...)):
+    file_bytes = await file.read()
+    filename = file.filename or "recording.webm"
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        res = await client.post(
+            f"{SUPABASE_URL}/storage/v1/object/recordings/{filename}",
+            headers={
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Content-Type": file.content_type or "audio/webm",
+            },
+            content=file_bytes
+        )
+    if res.status_code not in (200, 201):
+        raise HTTPException(status_code=500, detail=f"업로드 실패: {res.text}")
+
+    recording_url = f"{SUPABASE_URL}/storage/v1/object/recordings/{filename}"
+    return {"url": recording_url}
+
 
 class MeetingUpdate(BaseModel):
     title: str

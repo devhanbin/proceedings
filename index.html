@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Proceedings - 회의록 자동 정리</title>
+  <title>회의록 자동생성 AI</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -141,8 +141,8 @@
 <div id="login-screen" style="display:flex;align-items:center;justify-content:center;min-height:100vh;background:var(--bg);">
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:2.5rem;width:100%;max-width:360px;text-align:center;">
     <div style="font-size:36px;margin-bottom:1rem;">🎙️</div>
-    <h1 style="font-size:22px;font-weight:700;margin-bottom:6px;">Proceedings</h1>
-    <p style="font-size:14px;color:var(--text-secondary);margin-bottom:2rem;">회의록 자동 정리 시스템</p>
+    <h1 style="font-size:22px;font-weight:700;margin-bottom:6px;">회의록 자동생성 AI</h1>
+    <p style="font-size:14px;color:var(--text-secondary);margin-bottom:2rem;">AI 기반 회의록 자동 정리 시스템</p>
     <input type="password" id="loginPassword" placeholder="비밀번호를 입력하세요" style="width:100%;padding:10px 14px;font-size:14px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);color:var(--text-primary);outline:none;margin-bottom:10px;" onkeydown="if(event.key==='Enter') doLogin()" />
     <div id="loginError" style="display:none;font-size:13px;color:var(--danger-text);margin-bottom:10px;"></div>
     <button onclick="doLogin()" style="width:100%;padding:11px;font-size:14px;font-weight:500;background:var(--accent);color:#fff;border:none;border-radius:var(--radius-sm);cursor:pointer;">로그인</button>
@@ -284,6 +284,10 @@
           </div>
         </div>
         <div class="tab-content" id="detail-tab-transcript">
+          <div class="section" id="d-audio-section" style="display:none">
+            <div class="section-title">🎵 녹음 파일</div>
+            <audio id="d-audio-player" controls style="width:100%;margin-top:6px;"></audio>
+          </div>
           <div class="section"><div class="section-title">📝 전체 속기록</div><div class="transcript-box" id="d-transcript"></div></div>
         </div>
         <div class="actions-row" style="margin-top:1rem">
@@ -302,6 +306,7 @@
   const CHUNK_INTERVAL_MS = 5 * 60 * 1000;
 
   let GOOGLE_CLIENT_ID = '';
+  let SUPABASE_ANON_KEY = '';
   let userRole = null; // 'admin' | 'user'
   let currentProjectId = null, currentProjectName = '';
   let cachedMeetings = [];
@@ -309,6 +314,7 @@
   let timerInterval=null, chunkInterval=null, seconds=0;
   let minutesData=null, mimeType='audio/webm';
   let fullTranscript='', chunkCount=0, googleAccessToken=null;
+  let recordingBlob=null;
   let detailMinutesData=null;
 
   // ─── 뷰 전환 ───
@@ -439,6 +445,16 @@
     document.getElementById('detail-title').textContent = meeting.title || '제목 없음';
     renderDetail(detailMinutesData);
     document.getElementById('d-transcript').textContent = meeting.transcript || '';
+
+    // 녹음 파일 플레이어
+    if(meeting.recording_url) {
+      document.getElementById('d-audio-section').style.display='block';
+      const player = document.getElementById('d-audio-player');
+      player.src = meeting.recording_url + `?apikey=${SUPABASE_ANON_KEY}`;
+    } else {
+      document.getElementById('d-audio-section').style.display='none';
+    }
+
     showView('detail');
   }
 
@@ -554,6 +570,8 @@
     document.getElementById('waveform').classList.remove('active');
     await new Promise(resolve=>{mediaRecorder.onstop=resolve; mediaRecorder.stop();});
     mediaRecorder.stream.getTracks().forEach(t=>t.stop());
+    // 전체 녹음 blob 저장
+    recordingBlob = new Blob([...audioChunks], {type: mimeType});
     showStatus('🎤 마지막 구간 음성 변환 중...');
     await flushChunk();
     await generateMinutes(fullTranscript);
@@ -590,6 +608,26 @@
     const btn = event.target;
     btn.disabled=true; btn.textContent='저장 중...';
     try {
+      // 녹음 파일 업로드
+      let recording_url = '';
+      if(audioChunks.length > 0 || fullTranscript) {
+        btn.textContent='🎵 녹음 파일 업로드 중...';
+        try {
+          const allChunks = new Blob(recordingBlob ? [recordingBlob] : audioChunks, {type: mimeType});
+          if(allChunks.size > 0) {
+            const filename = `${currentProjectId}_${Date.now()}.webm`;
+            const formData = new FormData();
+            formData.append('file', allChunks, filename);
+            const uploadRes = await fetch(`${BACKEND}/upload-recording`, {method:'POST', body: formData});
+            if(uploadRes.ok) {
+              const uploadData = await uploadRes.json();
+              recording_url = uploadData.url;
+            }
+          }
+        } catch(e) { console.warn('녹음 업로드 실패:', e); }
+      }
+
+      btn.textContent='💾 회의록 저장 중...';
       await fetch(`${BACKEND}/meetings`, {
         method:'POST',
         headers:{'Content-Type':'application/json'},
@@ -599,12 +637,13 @@
           date: minutesData.date||'',
           attendees: (minutesData.attendees||[]).join(', '),
           minutes_json: JSON.stringify(minutesData),
-          transcript: fullTranscript
+          transcript: fullTranscript,
+          recording_url
         })
       });
       const saveEl=document.getElementById('saveStatus');
       saveEl.style.display='block';
-      saveEl.textContent='✅ 저장되었습니다!';
+      saveEl.textContent=`✅ 저장되었습니다!${recording_url ? ' (녹음 파일 포함)' : ''}`;
       btn.textContent='✅ 저장됨';
       setTimeout(()=>{ btn.disabled=false; btn.textContent='💾 저장'; }, 2000);
     } catch(e) {
@@ -774,7 +813,7 @@
   function showStatus(msg){document.getElementById('errorBox').style.display='none';document.getElementById('statusText').textContent=msg;document.getElementById('statusBox').style.display='flex';}
 
   function resetRecording(){
-    minutesData=null; seconds=0; fullTranscript=''; chunkCount=0; googleAccessToken=null;
+    minutesData=null; seconds=0; fullTranscript=''; chunkCount=0; googleAccessToken=null; recordingBlob=null;
     document.getElementById('timer').textContent='00:00:00';
     document.getElementById('timer').className='timer';
     document.getElementById('recordStatus').textContent='회의 시작 버튼을 눌러 녹음을 시작하세요';
@@ -829,6 +868,7 @@
       const res = await fetch(`${BACKEND}/config`);
       const config = await res.json();
       GOOGLE_CLIENT_ID = config.google_client_id;
+      SUPABASE_ANON_KEY = config.supabase_anon_key || '';
     } catch(e) { console.warn('config 로드 실패:', e); }
     await loadProjects();
   }
