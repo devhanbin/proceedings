@@ -287,6 +287,9 @@
           <div class="section" id="d-audio-section" style="display:none">
             <div class="section-title">🎵 녹음 파일</div>
             <audio id="d-audio-player" controls style="width:100%;margin-top:6px;"></audio>
+            <div style="margin-top:8px;">
+              <a id="d-audio-download" href="#" class="btn" style="font-size:12px;padding:5px 12px;text-decoration:none;">⬇️ 녹음 파일 다운로드</a>
+            </div>
           </div>
           <div class="section"><div class="section-title">📝 전체 속기록</div><div class="transcript-box" id="d-transcript"></div></div>
         </div>
@@ -450,7 +453,16 @@
     if(meeting.recording_url) {
       document.getElementById('d-audio-section').style.display='block';
       const player = document.getElementById('d-audio-player');
-      player.src = meeting.recording_url + `?apikey=${SUPABASE_ANON_KEY}`;
+      // 파일명 추출해서 signed URL 발급
+      const filename = meeting.recording_url.split('/recordings/').pop().split('?')[0];
+      fetch(`${BACKEND}/recording-url?path=${encodeURIComponent(filename)}`)
+        .then(r=>r.json())
+        .then(data=>{
+          player.src = data.url;
+          document.getElementById('d-audio-download').href = data.url;
+          document.getElementById('d-audio-download').download = filename;
+        })
+        .catch(e=>console.warn('녹음 URL 발급 실패:', e));
     } else {
       document.getElementById('d-audio-section').style.display='none';
     }

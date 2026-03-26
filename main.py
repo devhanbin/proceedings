@@ -232,7 +232,27 @@ async def upload_recording(file: UploadFile = File(...)):
     return {"url": recording_url}
 
 
-class MeetingUpdate(BaseModel):
+@app.get("/recording-url")
+async def get_recording_url(path: str):
+    """Supabase Storage signed URL 발급 (1시간 유효)"""
+    async with httpx.AsyncClient(timeout=30) as client:
+        res = await client.post(
+            f"{SUPABASE_URL}/storage/v1/object/sign/recordings/{path}",
+            headers={
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={"expiresIn": 3600}
+        )
+    print(f"Signed URL 발급: {res.status_code} {res.text[:200]}")
+    if res.status_code != 200:
+        raise HTTPException(status_code=500, detail=res.text)
+    signed_url = res.json().get("signedURL", "")
+    return {"url": f"{SUPABASE_URL}/storage/v1{signed_url}"}
+
+
+
     title: str
 
 
