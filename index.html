@@ -206,7 +206,7 @@
 
       <div class="card live-card" id="live-transcript-card">
         <div class="card-label">📝 실시간 속기록 <span class="chunk-badge" id="chunkBadge">0 구간</span></div>
-        <div class="live-transcript" id="live-transcript">녹음 중... 5분마다 속기록이 업데이트됩니다.</div>
+        <div class="live-transcript" id="live-transcript">녹음 중... 3분마다 속기록이 업데이트됩니다.</div>
       </div>
 
       <div id="errorBox" class="error"></div>
@@ -307,7 +307,7 @@
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
   const BACKEND = 'https://proceedings-f9gn.onrender.com';
-  const CHUNK_INTERVAL_MS = 5 * 60 * 1000;
+  const CHUNK_INTERVAL_MS = 3 * 60 * 1000; // 3분
 
   let GOOGLE_CLIENT_ID = '';
   let SUPABASE_ANON_KEY = '';
@@ -529,7 +529,7 @@
     for(let attempt=1; attempt<=2; attempt++) {
       try {
         const formData = new FormData();
-        formData.append('file', blob, 'chunk.mp4');
+        formData.append('file', blob, 'chunk.webm');
         if(isRecording) document.getElementById('recordStatus').textContent=`🔴 녹음 중... (구간 변환 중...)`;
         const res = await fetch(`${BACKEND}/transcribe`, {method:'POST', body: formData});
         if(!res.ok) { if(attempt===2 && isRecording) document.getElementById('recordStatus').textContent=`🔴 녹음 중... (구간 변환 실패, 계속 녹음 중)`; continue; }
