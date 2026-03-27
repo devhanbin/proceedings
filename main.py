@@ -86,38 +86,10 @@ async def transcribe(file: UploadFile = File(...)):
     mime = mime_map.get(ext, "audio/mp4")
 
     try:
-        import tempfile, subprocess, os as _os, uuid
-
-        # 고유한 임시 파일명 생성
-        tmp_id = str(uuid.uuid4())[:8]
-        tmp_dir = tempfile.gettempdir()
-        tmp_in_path = _os.path.join(tmp_dir, f"audio_in_{tmp_id}.webm")
-        tmp_out_path = _os.path.join(tmp_dir, f"audio_out_{tmp_id}.mp3")
-
-        with open(tmp_in_path, "wb") as f:
-            f.write(file_bytes)
-
-        result = subprocess.run(
-            ["ffmpeg", "-i", tmp_in_path, "-ar", "16000", "-ac", "1", "-y", tmp_out_path],
-            capture_output=True, timeout=120
-        )
-        print(f"[ffmpeg transcribe] returncode: {result.returncode}")
-
-        if result.returncode == 0:
-            with open(tmp_out_path, "rb") as f:
-                send_bytes = f.read()
-            send_filename = "audio.mp3"
-            send_mime = "audio/mpeg"
-            print(f"[ffmpeg transcribe] mp3 변환 완료: {len(send_bytes)} bytes")
-        else:
-            print(f"[ffmpeg transcribe] 변환 실패 stderr:\n{result.stderr.decode()}")
-            send_bytes = file_bytes
-            send_filename = file.filename
-            send_mime = mime
-
-        for p in [tmp_in_path, tmp_out_path]:
-            try: _os.remove(p)
-            except: pass
+        # webm 청크를 그대로 Whisper에 전송 (파일명을 mp4로 설정)
+        send_bytes = file_bytes
+        send_filename = "audio.mp4"
+        send_mime = "audio/mp4"
 
         async with httpx.AsyncClient(timeout=120) as client:
             response = await client.post(
