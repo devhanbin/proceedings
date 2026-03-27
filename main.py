@@ -1,901 +1,501 @@
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>회의록 자동생성 AI</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎙️</text></svg>">
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    :root {
-      --bg: #f9f9f7; --surface: #fff; --border: #e5e4df; --border-strong: #c8c7c0;
-      --text-primary: #1a1a18; --text-secondary: #6b6b65; --text-muted: #9e9e98;
-      --accent: #2E75B6; --accent-light: #e8f1fa;
-      --danger: #c0392b; --danger-bg: #fff0ee; --danger-border: #f5b8b0; --danger-text: #a3301f;
-      --radius-sm: 8px; --radius-lg: 16px;
-    }
-    body { font-family: -apple-system,"Pretendard","Apple SD Gothic Neo",sans-serif; background: var(--bg); color: var(--text-primary); min-height: 100vh; }
+import os
+import json
+import httpx
+import traceback
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
-    /* 레이아웃 */
-    .app { display: flex; min-height: 100vh; }
-    .sidebar { width: 260px; background: var(--surface); border-right: 1px solid var(--border); padding: 1.5rem 1rem; flex-shrink: 0; display: flex; flex-direction: column; }
-    .main { flex: 1; padding: 2rem; overflow-y: auto; max-width: 820px; }
+load_dotenv()
 
-    /* 사이드바 */
-    .sidebar-title { font-size: 16px; font-weight: 700; margin-bottom: 1.5rem; color: var(--accent); }
-    .project-list { flex: 1; overflow-y: auto; }
-    .project-item { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-radius: var(--radius-sm); cursor: pointer; font-size: 14px; color: var(--text-secondary); margin-bottom: 2px; }
-    .project-item:hover { background: var(--bg); }
-    .project-item.active { background: var(--accent-light); color: var(--accent); font-weight: 600; }
-    .project-item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .project-delete { opacity: 0; font-size: 16px; color: var(--danger); border: none; background: none; cursor: pointer; padding: 0 2px; }
-    .project-item:hover .project-delete { opacity: 1; }
-    .add-project-row { display: flex; gap: 6px; margin-top: 1rem; }
-    .add-project-input { flex: 1; padding: 7px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); outline: none; }
-    .add-project-input:focus { border-color: var(--border-strong); }
-    .btn-add { padding: 7px 12px; font-size: 13px; background: var(--accent); color: #fff; border: none; border-radius: var(--radius-sm); cursor: pointer; white-space: nowrap; }
-    .btn-add:hover { opacity: 0.88; }
+app = FastAPI(title="Proceedings API")
 
-    /* 회의록 목록 */
-    .meeting-list { margin-bottom: 1.5rem; }
-    .meeting-item { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 16px; margin-bottom: 8px; cursor: pointer; display: flex; align-items: center; gap: 12px; }
-    .meeting-item:hover { border-color: var(--accent); }
-    .meeting-item-info { flex: 1; }
-    .meeting-item-title { font-size: 14px; font-weight: 600; margin-bottom: 3px; }
-    .meeting-item-meta { font-size: 12px; color: var(--text-muted); }
-    .meeting-item-delete { opacity: 0; color: var(--danger); border: none; background: none; cursor: pointer; font-size: 18px; }
-    .meeting-item:hover .meeting-item-delete { opacity: 1; }
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-    /* 헤더 */
-    .page-header { margin-bottom: 1.5rem; display: flex; align-items: center; gap: 12px; }
-    .page-header h1 { font-size: 22px; font-weight: 700; }
-    .btn-new-meeting { padding: 8px 16px; font-size: 13px; background: var(--accent); color: #fff; border: none; border-radius: var(--radius-sm); cursor: pointer; }
-    .btn-new-meeting:hover { opacity: 0.88; }
+GROQ_API_KEY      = os.environ.get("GROQ_API_KEY", "")
+GROQ_WHISPER_URL  = "https://api.groq.com/openai/v1/audio/transcriptions"
+GROQ_CHAT_URL     = "https://api.groq.com/openai/v1/chat/completions"
+SUPABASE_URL      = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY      = os.environ.get("SUPABASE_KEY", "")
+GOOGLE_CLIENT_ID  = os.environ.get("GOOGLE_CLIENT_ID", "")
+USER_PASSWORD     = os.environ.get("USER_PASSWORD", "")
+ADMIN_PASSWORD    = os.environ.get("ADMIN_PASSWORD", "")
 
-    /* 빈 상태 */
-    .empty-state { text-align: center; padding: 3rem; color: var(--text-muted); }
-    .empty-state p { font-size: 15px; margin-bottom: 8px; }
-    .empty-state small { font-size: 13px; }
 
-    /* 카드 */
-    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 1.5rem; margin-bottom: 1rem; }
-    .card-label { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; color: var(--text-muted); text-transform: uppercase; margin-bottom: 14px; }
-
-    /* 녹음 */
-    .record-panel { text-align: center; padding: 1.5rem 1rem; }
-    .record-status { font-size: 14px; color: var(--text-secondary); margin-bottom: 1rem; }
-    .record-status.recording { color: var(--danger); font-weight: 600; }
-    .timer { font-size: 40px; font-weight: 300; letter-spacing: 4px; margin-bottom: 1rem; font-variant-numeric: tabular-nums; }
-    .timer.recording { color: var(--danger); }
-    .waveform { display: flex; align-items: center; justify-content: center; gap: 4px; height: 40px; margin-bottom: 1rem; }
-    .wave-bar { width: 4px; background: var(--border); border-radius: 2px; height: 6px; }
-    .waveform.active .wave-bar { background: var(--danger); animation: wave 1s ease-in-out infinite; }
-    .wave-bar:nth-child(1){animation-delay:0s}.wave-bar:nth-child(2){animation-delay:.1s}.wave-bar:nth-child(3){animation-delay:.2s}.wave-bar:nth-child(4){animation-delay:.3s}.wave-bar:nth-child(5){animation-delay:.4s}.wave-bar:nth-child(6){animation-delay:.3s}.wave-bar:nth-child(7){animation-delay:.2s}.wave-bar:nth-child(8){animation-delay:.1s}.wave-bar:nth-child(9){animation-delay:0s}
-    @keyframes wave { 0%,100%{height:6px} 50%{height:36px} }
-    .btn-record { width: 72px; height: 72px; border-radius: 50%; border: none; cursor: pointer; font-size: 24px; display: flex; align-items: center; justify-content: center; margin: 0 auto; transition: all 0.2s; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
-    .btn-record.idle { background: var(--accent); color: #fff; }
-    .btn-record.idle:hover { transform: scale(1.05); }
-    .btn-record.recording { background: var(--danger); color: #fff; animation: pulse 1.5s ease-in-out infinite; }
-    .btn-record:disabled { opacity: 0.4; cursor: not-allowed; animation: none; transform: none; }
-    @keyframes pulse { 0%,100%{box-shadow:0 4px 12px rgba(192,57,43,0.3)} 50%{box-shadow:0 4px 24px rgba(192,57,43,0.6)} }
-    .btn-label { font-size: 13px; color: var(--text-secondary); margin-top: 8px; }
-
-    /* 버튼 */
-    .btn { padding: 9px 18px; font-size: 13px; font-weight: 500; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-primary); cursor: pointer; }
-    .btn:hover { background: var(--bg); }
-    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
-    .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
-    .btn-primary:hover { opacity: 0.88; background: var(--accent); }
-    .btn-green { background: #1a6b3c; color: #fff; border-color: #1a6b3c; }
-    .btn-green:hover { opacity: 0.88; background: #1a6b3c; }
-    .btn-blue { background: #1a73e8; color: #fff; border-color: #1a73e8; }
-    .btn-blue:hover { opacity: 0.88; background: #1a73e8; }
-
-    /* 상태 */
-    .status { display: none; align-items: center; gap: 10px; font-size: 13px; color: var(--text-secondary); padding: 10px 0; justify-content: center; }
-    .spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--text-primary); animation: spin 0.7s linear infinite; flex-shrink: 0; }
-    @keyframes spin { to{transform:rotate(360deg)} }
-    .error { display: none; background: var(--danger-bg); border: 1px solid var(--danger-border); color: var(--danger-text); font-size: 13px; padding: 10px 14px; border-radius: var(--radius-sm); margin-bottom: 1rem; }
-
-    /* 실시간 속기록 */
-    .live-card { display: none; }
-    .live-transcript { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 1rem; font-size: 13px; color: var(--text-secondary); line-height: 1.8; max-height: 120px; overflow-y: auto; white-space: pre-wrap; }
-    .chunk-badge { display: inline-block; background: var(--accent-light); color: var(--accent); font-size: 11px; padding: 2px 7px; border-radius: 10px; margin-left: 6px; }
-
-    /* 회의록 결과 */
-    .result { display: none; }
-    .tabs { display: flex; border-bottom: 2px solid var(--border); margin-bottom: 1.5rem; }
-    .tab { padding: 9px 18px; font-size: 13px; font-weight: 500; cursor: pointer; color: var(--text-secondary); border-bottom: 2px solid transparent; margin-bottom: -2px; }
-    .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-    .tab-content { display: none; }
-    .tab-content.active { display: block; }
-    .info-grid { display: grid; grid-template-columns: 110px 1fr; }
-    .info-label { padding: 7px 10px; font-size: 12px; font-weight: 600; background: #f0f6fc; border: 1px solid var(--border); color: var(--accent); }
-    .info-value { padding: 7px 10px; font-size: 13px; border: 1px solid var(--border); border-left: none; }
-    .info-label:not(:first-child),.info-value:not(:nth-child(2)) { border-top: none; }
-    .section { margin-bottom: 1.25rem; }
-    .section-title { font-size: 14px; font-weight: 700; color: var(--accent); margin-bottom: 8px; padding-bottom: 5px; border-bottom: 2px solid var(--accent-light); }
-    .list-item { font-size: 13px; padding: 5px 0 5px 14px; border-bottom: 1px solid var(--bg); line-height: 1.6; position: relative; }
-    .list-item::before { content:"•"; position: absolute; left: 0; color: var(--accent); }
-    .discussion-item { margin-bottom: 10px; }
-    .discussion-topic { font-size: 13px; font-weight: 600; margin-bottom: 3px; }
-    .discussion-content { font-size: 12px; color: var(--text-secondary); line-height: 1.7; padding-left: 10px; border-left: 3px solid var(--accent-light); }
-    .action-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    .action-table th { background: #f0f6fc; color: var(--accent); font-weight: 600; padding: 7px 10px; border: 1px solid var(--border); text-align: left; }
-    .action-table td { padding: 7px 10px; border: 1px solid var(--border); vertical-align: top; line-height: 1.5; }
-    .action-table tr:nth-child(even) td { background: var(--bg); }
-    .transcript-box { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 1rem; font-size: 12px; color: var(--text-secondary); line-height: 1.8; max-height: 180px; overflow-y: auto; white-space: pre-wrap; }
-    .actions-row { display: flex; gap: 8px; margin-top: 1rem; flex-wrap: wrap; }
-    .calendar-status { display: none; margin-top: 8px; font-size: 12px; color: #1a6b3c; }
-    .edit-hint { font-size: 11px; color: var(--text-muted); margin-bottom: 8px; }
-    [contenteditable] { outline: none; border-radius: 3px; transition: background 0.15s; }
-    [contenteditable]:hover { background: #f0f6fc; cursor: text; }
-    [contenteditable]:focus { background: #e8f1fa; box-shadow: 0 0 0 2px rgba(46,117,182,0.2); }
-
-    /* 뷰 전환 */
-    .view { display: none; }
-    .view.active { display: block; }
-  </style>
-</head>
-<body>
-<!-- 로그인 화면 -->
-<div id="login-screen" style="display:flex;align-items:center;justify-content:center;min-height:100vh;background:var(--bg);">
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:2.5rem;width:100%;max-width:360px;text-align:center;">
-    <div style="font-size:36px;margin-bottom:1rem;">🎙️</div>
-    <h1 style="font-size:22px;font-weight:700;margin-bottom:6px;">회의록 자동생성 AI</h1>
-    <p style="font-size:14px;color:var(--text-secondary);margin-bottom:2rem;">AI 기반 회의록 자동 정리 시스템</p>
-    <input type="password" id="loginPassword" placeholder="비밀번호를 입력하세요" style="width:100%;padding:10px 14px;font-size:14px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);color:var(--text-primary);outline:none;margin-bottom:10px;" onkeydown="if(event.key==='Enter') doLogin()" />
-    <div id="loginError" style="display:none;font-size:13px;color:var(--danger-text);margin-bottom:10px;"></div>
-    <button onclick="doLogin()" style="width:100%;padding:11px;font-size:14px;font-weight:500;background:var(--accent);color:#fff;border:none;border-radius:var(--radius-sm);cursor:pointer;">로그인</button>
-  </div>
-</div>
-
-<div class="app" id="main-app" style="display:none;">
-  <!-- 사이드바 -->
-  <div class="sidebar">
-    <div class="sidebar-title">📁 프로젝트</div>
-    <div class="project-list" id="projectList">
-      <div style="font-size:13px;color:var(--text-muted);padding:8px">로딩 중...</div>
-    </div>
-    <div class="add-project-row">
-      <input class="add-project-input" id="newProjectName" placeholder="새 프로젝트 이름" onkeydown="if(event.key==='Enter') addProject()" />
-      <button class="btn-add" onclick="addProject()">추가</button>
-    </div>
-  </div>
-
-  <!-- 메인 -->
-  <div class="main">
-
-    <!-- 프로젝트 미선택 -->
-    <div class="view active" id="view-empty">
-      <div class="empty-state" style="margin-top:5rem">
-        <p>👈 왼쪽에서 프로젝트를 선택하세요</p>
-        <small>프로젝트별로 회의록을 관리할 수 있어요</small>
-      </div>
-    </div>
-
-    <!-- 회의록 목록 -->
-    <div class="view" id="view-list">
-      <div class="page-header">
-        <h1 id="currentProjectName"></h1>
-        <button class="btn-new-meeting" onclick="showNewMeeting()">🎙️ 새 회의 시작</button>
-      </div>
-      <div class="meeting-list" id="meetingList"></div>
-    </div>
-
-    <!-- 새 회의 녹음 -->
-    <div class="view" id="view-record">
-      <div class="page-header">
-        <button class="btn" onclick="showList()">← 목록으로</button>
-        <h1>새 회의</h1>
-      </div>
-
-      <div class="card">
-        <div class="record-panel">
-          <div class="record-status" id="recordStatus">회의 시작 버튼을 눌러 녹음을 시작하세요</div>
-          <div class="timer" id="timer">00:00:00</div>
-          <div class="waveform" id="waveform">
-            <div class="wave-bar"></div><div class="wave-bar"></div><div class="wave-bar"></div>
-            <div class="wave-bar"></div><div class="wave-bar"></div><div class="wave-bar"></div>
-            <div class="wave-bar"></div><div class="wave-bar"></div><div class="wave-bar"></div>
-          </div>
-          <button class="btn-record idle" id="recordBtn" onclick="toggleRecording()">▶</button>
-          <div class="btn-label" id="btnLabel">회의 시작</div>
-        </div>
-      </div>
-
-      <div class="card live-card" id="live-transcript-card">
-        <div class="card-label">📝 실시간 속기록 <span class="chunk-badge" id="chunkBadge">0 구간</span></div>
-        <div class="live-transcript" id="live-transcript">녹음 중... 5분마다 속기록이 업데이트됩니다.</div>
-      </div>
-
-      <div id="errorBox" class="error"></div>
-      <div id="statusBox" class="status"><div class="spinner"></div><span id="statusText">처리 중...</span></div>
-
-      <div id="result" class="result">
-        <div class="card">
-          <div class="tabs">
-            <div class="tab active" onclick="switchTab('minutes')">📋 회의록</div>
-            <div class="tab" onclick="switchTab('transcript')">📝 전체 속기록</div>
-          </div>
-          <div class="edit-hint" id="edit-hint" style="display:none">✏️ 내용을 클릭하면 바로 수정할 수 있어요</div>
-
-          <div class="tab-content active" id="tab-minutes">
-            <div class="section">
-              <div class="section-title">📌 기본 정보</div>
-              <div class="info-grid">
-                <div class="info-label">회의 제목</div><div class="info-value" id="r-title"></div>
-                <div class="info-label">일시</div><div class="info-value" id="r-date"></div>
-                <div class="info-label">참석자</div><div class="info-value" id="r-attendees"></div>
-                <div class="info-label">다음 회의</div><div class="info-value" id="r-next"></div>
-              </div>
-            </div>
-            <div class="section"><div class="section-title">📋 안건</div><div id="r-agenda"></div></div>
-            <div class="section"><div class="section-title">💬 논의 내용</div><div id="r-discussions"></div></div>
-            <div class="section"><div class="section-title">✅ 결정사항</div><div id="r-decisions"></div></div>
-            <div class="section">
-              <div class="section-title">🎯 액션아이템</div>
-              <table class="action-table"><thead><tr><th style="width:36px;text-align:center"><input type="checkbox" id="checkAll" onclick="toggleAllChecks(this)" title="전체선택"></th><th>할일</th><th>담당자</th><th>기한</th><th style="width:36px"></th></tr></thead><tbody id="r-actions"></tbody></table>
-              <button class="btn" onclick="addActionItem()" style="margin-top:8px;font-size:12px;padding:5px 10px;">+ 액션아이템 추가</button>
-            </div>
-          </div>
-
-          <div class="tab-content" id="tab-transcript">
-            <div class="section"><div class="section-title">📝 전체 속기록</div><div class="transcript-box" id="r-transcript"></div></div>
-          </div>
-
-          <div class="actions-row">
-            <button class="btn btn-green" onclick="downloadDocx()">📄 Word 다운로드</button>
-            <button class="btn btn-blue" id="calendarBtn" onclick="addToCalendar()">📅 Google Calendar 등록</button>
-            <button class="btn btn-primary" onclick="saveMeeting()">💾 저장</button>
-            <button class="btn" onclick="resetRecording()">🔄 새 회의</button>
-          </div>
-          <div class="calendar-status" id="calendarStatus"></div>
-          <div id="saveStatus" style="display:none;margin-top:8px;font-size:12px;color:#1a6b3c;"></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 회의록 상세 보기 -->
-    <div class="view" id="view-detail">
-      <div class="page-header">
-        <button class="btn" onclick="showList()">← 목록으로</button>
-        <h1 id="detail-title" onclick="editDetailTitle()" style="cursor:pointer;" title="클릭하여 제목 수정"></h1>
-      </div>
-      <div class="card">
-        <div class="tabs">
-          <div class="tab active" onclick="switchDetailTab('minutes')">📋 회의록</div>
-          <div class="tab" onclick="switchDetailTab('transcript')">📝 전체 속기록</div>
-        </div>
-        <div class="tab-content active" id="detail-tab-minutes">
-          <div class="section">
-            <div class="section-title">📌 기본 정보</div>
-            <div class="info-grid">
-              <div class="info-label">일시</div><div class="info-value" id="d-date"></div>
-              <div class="info-label">참석자</div><div class="info-value" id="d-attendees"></div>
-              <div class="info-label">다음 회의</div><div class="info-value" id="d-next"></div>
-            </div>
-          </div>
-          <div class="section"><div class="section-title">📋 안건</div><div id="d-agenda"></div></div>
-          <div class="section"><div class="section-title">💬 논의 내용</div><div id="d-discussions"></div></div>
-          <div class="section"><div class="section-title">✅ 결정사항</div><div id="d-decisions"></div></div>
-          <div class="section">
-            <div class="section-title">🎯 액션아이템</div>
-            <table class="action-table"><thead><tr><th>할일</th><th>담당자</th><th>기한</th></tr></thead><tbody id="d-actions"></tbody></table>
-          </div>
-        </div>
-        <div class="tab-content" id="detail-tab-transcript">
-          <div class="section" id="d-audio-section" style="display:none">
-            <div class="section-title">🎵 녹음 파일</div>
-            <audio id="d-audio-player" controls style="width:100%;margin-top:6px;"></audio>
-            <div style="margin-top:8px;">
-              <a id="d-audio-download" href="#" class="btn" style="font-size:12px;padding:5px 12px;text-decoration:none;">⬇️ 녹음 파일 다운로드</a>
-            </div>
-          </div>
-          <div class="section"><div class="section-title">📝 전체 속기록</div><div class="transcript-box" id="d-transcript"></div></div>
-        </div>
-        <div class="actions-row" style="margin-top:1rem">
-          <button class="btn btn-green" onclick="downloadDocxFromDetail()">📄 Word 다운로드</button>
-        </div>
-      </div>
-    </div>
-
-  </div>
-</div>
-
-<script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.min.js"></script>
-<script src="https://accounts.google.com/gsi/client" async defer></script>
-<script>
-  const BACKEND = 'https://proceedings-f9gn.onrender.com';
-  const CHUNK_INTERVAL_MS = 5 * 60 * 1000;
-
-  let GOOGLE_CLIENT_ID = '';
-  let SUPABASE_ANON_KEY = '';
-  let userRole = null; // 'admin' | 'user'
-  let currentProjectId = null, currentProjectName = '';
-  let cachedMeetings = [];
-  let mediaRecorder=null, audioChunks=[], allAudioChunks=[], isRecording=false;
-  let timerInterval=null, chunkInterval=null, seconds=0;
-  let minutesData=null, mimeType='audio/webm';
-  let fullTranscript='', chunkCount=0, googleAccessToken=null;
-  let recordingBlob=null;
-  let detailMinutesData=null;
-
-  // ─── 뷰 전환 ───
-  function showView(name) {
-    document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
-    document.getElementById(`view-${name}`).classList.add('active');
-  }
-  function showList() { loadMeetings(currentProjectId); showView('list'); }
-  function showNewMeeting() { resetRecording(); showView('record'); }
-
-  // ─── 프로젝트 ───
-  async function loadProjects() {
-    const res = await fetch(`${BACKEND}/projects`);
-    const projects = await res.json();
-    const list = document.getElementById('projectList');
-    if(projects.length === 0) {
-      list.innerHTML = '<div style="font-size:13px;color:var(--text-muted);padding:8px">프로젝트가 없어요</div>';
-      return;
-    }
-    list.innerHTML = projects.map(p => `
-      <div class="project-item ${p.id===currentProjectId?'active':''}" onclick="selectProject('${p.id}','${p.name.replace(/'/g,"\\'")}')">
-        <span class="project-item-name" ondblclick="event.stopPropagation();editProjectName('${p.id}','${p.name.replace(/'/g,"\\'")}')">📁 ${p.name}</span>
-        <button class="project-delete" onclick="event.stopPropagation();deleteProject('${p.id}')" title="삭제">×</button>
-      </div>`).join('');
-  }
-
-  async function editProjectName(id, currentName) {
-    const newName = prompt('프로젝트 이름을 수정하세요:', currentName);
-    if(!newName || newName.trim() === currentName) return;
-    await fetch(`${BACKEND}/projects/${id}`, {
-      method:'PATCH',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({name: newName.trim()})
-    });
-    if(currentProjectId === id) {
-      currentProjectName = newName.trim();
-      document.getElementById('currentProjectName').textContent = newName.trim();
-    }
-    await loadProjects();
-  }
-
-  async function addProject() {
-    const input = document.getElementById('newProjectName');
-    const name = input.value.trim();
-    if(!name) return;
-    await fetch(`${BACKEND}/projects`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name})});
-    input.value = '';
-    await loadProjects();
-  }
-
-  async function deleteProject(id) {
-    if(!confirm('프로젝트와 모든 회의록이 삭제됩니다. 계속할까요?')) return;
-    await fetch(`${BACKEND}/projects/${id}`, {method:'DELETE'});
-    if(currentProjectId === id) { currentProjectId=null; showView('empty'); }
-    await loadProjects();
-  }
-
-  async function editProjectName(id, currentName) {
-    const newName = prompt('프로젝트 이름을 입력하세요:', currentName);
-    if(!newName || newName.trim() === currentName) return;
-    await fetch(`${BACKEND}/projects/${id}`, {
-      method:'PATCH',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({name: newName.trim()})
-    });
-    if(currentProjectId === id) {
-      currentProjectName = newName.trim();
-      document.getElementById('currentProjectName').textContent = newName.trim();
-    }
-    await loadProjects();
-  }
-
-  async function selectProject(id, name) {
-    currentProjectId = id;
-    currentProjectName = name;
-    document.getElementById('currentProjectName').textContent = name;
-    await loadProjects();
-    await loadMeetings(id);
-    showView('list');
-  }
-
-  // ─── 회의록 목록 ───
-  async function loadMeetings(projectId) {
-    const res = await fetch(`${BACKEND}/projects/${projectId}/meetings`);
-    cachedMeetings = await res.json();
-    console.log('meetings:', JSON.stringify(cachedMeetings.slice(0,1)));
-    const list = document.getElementById('meetingList');
-    if(cachedMeetings.length === 0) {
-      list.innerHTML = '<div class="empty-state"><p>아직 회의록이 없어요</p><small>새 회의 시작 버튼을 눌러보세요</small></div>';
-      return;
-    }
-    list.innerHTML = cachedMeetings.map(m => `
-      <div class="meeting-item" onclick="showDetail('${m.id}')">
-        <div class="meeting-item-info">
-          <div class="meeting-item-title">${m.title || '제목 없음'}</div>
-          <div class="meeting-item-meta">${m.date || '날짜 미기재'} · ${m.attendees || '참석자 미기재'}</div>
-        </div>
-        <button class="meeting-item-delete" onclick="event.stopPropagation();deleteMeeting('${m.id}')" title="삭제">×</button>
-      </div>`).join('');
-  }
-
-  async function editMeetingTitle(id, currentTitle) {
-    const newTitle = prompt('회의록 제목을 수정하세요:', currentTitle);
-    if(!newTitle || newTitle.trim() === currentTitle) return;
-    await fetch(`${BACKEND}/meetings/${id}`, {
-      method:'PATCH',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({title: newTitle.trim()})
-    });
-    await loadMeetings(currentProjectId);
-  }
-
-  async function deleteMeeting(id) {
-    if(!confirm('회의록을 삭제할까요?')) return;
-    await fetch(`${BACKEND}/meetings/${id}`, {method:'DELETE'});
-    await loadMeetings(currentProjectId);
-  }
-
-  let currentMeetingId = null;
-
-  function showDetail(id) {
-    const meeting = cachedMeetings.find(m => m.id === id);
-    if(!meeting) return;
-    currentMeetingId = id;
-    try {
-      detailMinutesData = JSON.parse(meeting.minutes_json);
-    } catch(e) { detailMinutesData = {}; }
-    document.getElementById('detail-title').textContent = meeting.title || '제목 없음';
-    renderDetail(detailMinutesData);
-    document.getElementById('d-transcript').textContent = meeting.transcript || '';
-
-    // 녹음 파일 플레이어
-    if(meeting.recording_url) {
-      document.getElementById('d-audio-section').style.display='block';
-      const player = document.getElementById('d-audio-player');
-      // 파일명 추출해서 signed URL 발급
-      const filename = meeting.recording_url.split('/recordings/').pop().split('?')[0];
-      fetch(`${BACKEND}/recording-url?path=${encodeURIComponent(filename)}`)
-        .then(r=>r.json())
-        .then(data=>{
-          player.src = data.url;
-          const dlBtn = document.getElementById('d-audio-download');
-          dlBtn.href = `${BACKEND}/download-recording?path=${encodeURIComponent(filename)}`;
-          dlBtn.removeAttribute('target');
-          dlBtn.removeAttribute('download');
-        })
-        .catch(e=>console.warn('녹음 URL 발급 실패:', e));
-    } else {
-      document.getElementById('d-audio-section').style.display='none';
+def supabase_headers():
+    return {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
     }
 
-    showView('detail');
-  }
 
-  async function editDetailTitle() {
-    const currentTitle = document.getElementById('detail-title').textContent;
-    const newTitle = prompt('회의록 제목을 수정하세요:', currentTitle);
-    if(!newTitle || newTitle.trim() === currentTitle) return;
-    await fetch(`${BACKEND}/meetings/${currentMeetingId}`, {
-      method:'PATCH',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({title: newTitle.trim()})
-    });
-    document.getElementById('detail-title').textContent = newTitle.trim();
-    // 캐시 업데이트
-    const meeting = cachedMeetings.find(m => m.id === currentMeetingId);
-    if(meeting) meeting.title = newTitle.trim();
-  }
+def log(tag: str, status: int, body: str = ""):
+    print(f"[{tag}] {status} | {body[:300]}")
 
-  function renderDetail(m) {
-    document.getElementById('d-date').textContent = m.date||'미기재';
-    document.getElementById('d-attendees').textContent = (m.attendees||[]).join(', ')||'미기재';
-    document.getElementById('d-next').textContent = m.next_meeting||'미정';
-    document.getElementById('d-agenda').innerHTML=(m.agenda||[]).map(a=>`<div class="list-item">${a}</div>`).join('')||'<div class="list-item" style="color:var(--text-muted)">없음</div>';
-    document.getElementById('d-discussions').innerHTML=(m.discussions||[]).map(d=>`<div class="discussion-item"><div class="discussion-topic">${d.topic}</div><div class="discussion-content">${d.content}</div></div>`).join('');
-    document.getElementById('d-decisions').innerHTML=(m.decisions||[]).map(d=>`<div class="list-item">${d}</div>`).join('')||'<div class="list-item" style="color:var(--text-muted)">없음</div>';
-    document.getElementById('d-actions').innerHTML=(m.action_items||[]).map(a=>`<tr><td>${a.task||''}</td><td>${a.owner||'미정'}</td><td>${a.due||'미정'}</td></tr>`).join('');
-  }
 
-  function switchDetailTab(tab) {
-    document.querySelectorAll('#view-detail .tab').forEach((t,i)=>t.classList.toggle('active',(i===0)===(tab==='minutes')));
-    document.getElementById('detail-tab-minutes').classList.toggle('active',tab==='minutes');
-    document.getElementById('detail-tab-transcript').classList.toggle('active',tab==='transcript');
-  }
-
-  // ─── 녹음 ───
-  function switchTab(tab) {
-    document.querySelectorAll('#view-record .tab').forEach((t,i)=>t.classList.toggle('active',(i===0)===(tab==='minutes')));
-    document.getElementById('tab-minutes').classList.toggle('active',tab==='minutes');
-    document.getElementById('tab-transcript').classList.toggle('active',tab==='transcript');
-  }
-
-  function updateTimer() {
-    seconds++;
-    const h=String(Math.floor(seconds/3600)).padStart(2,'0');
-    const m=String(Math.floor((seconds%3600)/60)).padStart(2,'0');
-    const s=String(seconds%60).padStart(2,'0');
-    document.getElementById('timer').textContent=`${h}:${m}:${s}`;
-  }
-
-  async function toggleRecording() { if(!isRecording) await startRecording(); else await stopRecording(); }
-
-  async function flushChunk() {
-    if(audioChunks.length === 0) return;
-    const chunks = audioChunks.splice(0);
-    const blob = new Blob(chunks, {type: mimeType});
-    if(blob.size < 5000) return;
-    for(let attempt=1; attempt<=2; attempt++) {
-      try {
-        const formData = new FormData();
-        formData.append('file', blob, 'chunk.webm');
-        if(isRecording) document.getElementById('recordStatus').textContent=`🔴 녹음 중... (구간 변환 중...)`;
-        const res = await fetch(`${BACKEND}/transcribe`, {method:'POST', body: formData});
-        if(!res.ok) { if(attempt===2 && isRecording) document.getElementById('recordStatus').textContent=`🔴 녹음 중... (구간 변환 실패, 계속 녹음 중)`; continue; }
-        const data = await res.json();
-        const text = (data.transcript||'').trim();
-        if(text) {
-          fullTranscript += (fullTranscript?'\n':'')+text;
-          chunkCount++;
-          const liveEl=document.getElementById('live-transcript');
-          liveEl.textContent=fullTranscript; liveEl.scrollTop=liveEl.scrollHeight;
-          document.getElementById('chunkBadge').textContent=`${chunkCount} 구간 완료`;
-          if(isRecording) document.getElementById('recordStatus').textContent=`🔴 녹음 중... (${chunkCount}구간 속기록 완료)`;
-        }
-        break;
-      } catch(e) { console.warn(`청크 오류 (시도${attempt}):`,e); }
+# ─────────────────────────────────────────
+# 설정 / 인증
+# ─────────────────────────────────────────
+@app.get("/config")
+async def get_config():
+    return {
+        "google_client_id": GOOGLE_CLIENT_ID,
+        "supabase_anon_key": SUPABASE_KEY,
     }
-  }
 
-  async function startRecording() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({audio:true});
-      audioChunks=[]; allAudioChunks=[]; fullTranscript=''; chunkCount=0;
-      mimeType=MediaRecorder.isTypeSupported('audio/webm;codecs=opus')?'audio/webm;codecs=opus':'audio/webm';
-      mediaRecorder=new MediaRecorder(stream,{mimeType});
-      mediaRecorder.ondataavailable=e=>{if(e.data.size>0){ audioChunks.push(e.data); allAudioChunks.push(e.data); }};
-      mediaRecorder.start(1000);
-      isRecording=true; seconds=0;
-      timerInterval=setInterval(updateTimer,1000);
-      chunkInterval=setInterval(flushChunk,CHUNK_INTERVAL_MS);
-      document.getElementById('recordBtn').className='btn-record recording';
-      document.getElementById('recordBtn').textContent='⏹';
-      document.getElementById('btnLabel').textContent='회의 종료';
-      document.getElementById('recordStatus').textContent='🔴 녹음 중...';
-      document.getElementById('recordStatus').className='record-status recording';
-      document.getElementById('timer').className='timer recording';
-      document.getElementById('waveform').classList.add('active');
-      document.getElementById('errorBox').style.display='none';
-      document.getElementById('result').style.display='none';
-      document.getElementById('live-transcript-card').style.display='block';
-      document.getElementById('chunkBadge').textContent='0 구간';
-    } catch(e) { showError('마이크 접근 권한이 필요합니다.'); }
-  }
 
-  async function stopRecording() {
-    clearInterval(timerInterval); clearInterval(chunkInterval);
-    isRecording=false;
-    document.getElementById('recordBtn').disabled=true;
-    document.getElementById('recordBtn').textContent='⏳';
-    document.getElementById('btnLabel').textContent='처리 중...';
-    document.getElementById('recordStatus').textContent='녹음 완료! 마지막 구간 변환 중...';
-    document.getElementById('recordStatus').className='record-status';
-    document.getElementById('timer').className='timer';
-    document.getElementById('waveform').classList.remove('active');
-    await new Promise(resolve=>{mediaRecorder.onstop=resolve; mediaRecorder.stop();});
-    mediaRecorder.stream.getTracks().forEach(t=>t.stop());
-    // 전체 녹음 blob 저장 (청크 전송과 무관하게 전체 누적)
-    recordingBlob = new Blob(allAudioChunks, {type: mimeType});
-    showStatus('🎤 마지막 구간 음성 변환 중...');
-    await flushChunk();
-    await generateMinutes(fullTranscript);
-    document.getElementById('recordBtn').disabled=false;
-    document.getElementById('recordBtn').className='btn-record idle';
-    document.getElementById('recordBtn').textContent='▶';
-    document.getElementById('btnLabel').textContent='새 회의 시작';
-  }
+class LoginRequest(BaseModel):
+    password: str
 
-  async function generateMinutes(transcript) {
-    if(!transcript.trim()) { showError('음성이 인식되지 않았습니다.'); return; }
-    showStatus('📝 회의록을 작성하는 중...');
-    try {
-      const res=await fetch(`${BACKEND}/generate-minutes`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({transcript})});
-      if(!res.ok) throw new Error(await res.text());
-      const data=await res.json();
-      minutesData=data.minutes;
-      renderMinutes(minutesData);
-      document.getElementById('r-transcript').textContent=transcript;
-      document.getElementById('statusBox').style.display='none';
-      document.getElementById('result').style.display='block';
-      document.getElementById('recordStatus').textContent='✅ 회의록이 생성되었습니다!';
-      document.getElementById('result').scrollIntoView({behavior:'smooth'});
-    } catch(e) {
-      showError('오류: '+e.message);
-      document.getElementById('statusBox').style.display='none';
-    }
-  }
 
-  // ─── 저장 ───
-  async function saveMeeting() {
-    if(!minutesData || !currentProjectId) { alert('프로젝트를 선택해주세요.'); return; }
-    syncMinutesData();
-    const btn = event.target;
-    btn.disabled=true; btn.textContent='저장 중...';
-    try {
-      // 녹음 파일 업로드
-      let recording_url = '';
-      if(recordingBlob && recordingBlob.size > 0) {
-        btn.textContent='🎵 녹음 파일 업로드 중...';
-        try {
-          const filename = `${currentProjectId}_${Date.now()}.webm`;
-          const formData = new FormData();
-          formData.append('file', recordingBlob, filename);
-          const uploadRes = await fetch(`${BACKEND}/upload-recording`, {method:'POST', body: formData});
-          if(uploadRes.ok) {
-            const uploadData = await uploadRes.json();
-            recording_url = uploadData.url;
-          } else {
-            console.warn('녹음 업로드 실패:', await uploadRes.text());
-          }
-        } catch(e) { console.warn('녹음 업로드 오류:', e); }
-      }
+@app.post("/login")
+async def login(req: LoginRequest):
+    if req.password == ADMIN_PASSWORD:
+        return {"role": "admin"}
+    elif req.password == USER_PASSWORD:
+        return {"role": "user"}
+    else:
+        raise HTTPException(status_code=401, detail="비밀번호가 올바르지 않습니다.")
 
-      btn.textContent='💾 회의록 저장 중...';
-      await fetch(`${BACKEND}/meetings`, {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({
-          project_id: currentProjectId,
-          title: minutesData.title||'제목 없음',
-          date: minutesData.date||'',
-          attendees: (minutesData.attendees||[]).join(', '),
-          minutes_json: JSON.stringify(minutesData),
-          transcript: fullTranscript,
-          recording_url
-        })
-      });
-      const saveEl=document.getElementById('saveStatus');
-      saveEl.style.display='block';
-      saveEl.textContent=`✅ 저장되었습니다!${recording_url ? ' (녹음 파일 포함)' : ''}`;
-      btn.textContent='✅ 저장됨';
-      setTimeout(()=>{ btn.disabled=false; btn.textContent='💾 저장'; }, 2000);
-    } catch(e) {
-      alert('저장 실패: '+e.message);
-      btn.disabled=false; btn.textContent='💾 저장';
-    }
-  }
 
-  // ─── 회의록 렌더링 ───
-  function renderMinutes(m) {
-    document.getElementById('r-title').innerHTML=`<span contenteditable="true">${m.title||'-'}</span>`;
-    document.getElementById('r-date').innerHTML=`<span contenteditable="true">${m.date||'미기재'}</span>`;
-    document.getElementById('r-attendees').innerHTML=`<span contenteditable="true">${(m.attendees||[]).join(', ')||'미기재'}</span>`;
-    document.getElementById('r-next').innerHTML=`<span contenteditable="true">${m.next_meeting||'미정'}</span>`;
-    document.getElementById('edit-hint').style.display='block';
-    document.getElementById('r-agenda').innerHTML=(m.agenda||[]).map((a,i)=>
-      `<div class="list-item"><span contenteditable="true" data-field="agenda" data-index="${i}">${a}</span></div>`
-    ).join('')||'<div class="list-item" style="color:var(--text-muted)">없음</div>';
-    document.getElementById('r-discussions').innerHTML=(m.discussions||[]).map((d,i)=>
-      `<div class="discussion-item">
-        <div class="discussion-topic"><span contenteditable="true" data-field="disc-topic" data-index="${i}">${d.topic}</span></div>
-        <div class="discussion-content"><span contenteditable="true" data-field="disc-content" data-index="${i}">${d.content}</span></div>
-      </div>`).join('');
-    document.getElementById('r-decisions').innerHTML=(m.decisions||[]).map((d,i)=>
-      `<div class="list-item"><span contenteditable="true" data-field="decisions" data-index="${i}">${d}</span></div>`
-    ).join('')||'<div class="list-item" style="color:var(--text-muted)">없음</div>';
-    document.getElementById('r-actions').innerHTML=(m.action_items||[]).map((a,i)=>
-      `<tr>
-        <td style="text-align:center"><input type="checkbox" class="action-check" data-index="${i}" checked></td>
-        <td><span contenteditable="true" data-field="task" data-index="${i}">${a.task||''}</span></td>
-        <td><span contenteditable="true" data-field="owner" data-index="${i}">${a.owner||'미정'}</span></td>
-        <td><span contenteditable="true" data-field="due" data-index="${i}">${a.due||'미정'}</span></td>
-        <td style="text-align:center"><button onclick="deleteActionItem(${i})" style="background:none;border:none;cursor:pointer;color:#c0392b;font-size:15px;">×</button></td>
-      </tr>`).join('');
-    document.getElementById('checkAll').checked=true;
-  }
+# ─────────────────────────────────────────
+# 음성 → 텍스트 (Whisper)
+# ─────────────────────────────────────────
+@app.post("/transcribe")
+async def transcribe(file: UploadFile = File(...)):
+    if not GROQ_API_KEY:
+        raise HTTPException(status_code=500, detail="GROQ_API_KEY가 설정되지 않았습니다.")
 
-  function syncMinutesData() {
-    if(!minutesData) return;
-    minutesData.title=document.querySelector('#r-title [contenteditable]')?.innerText.trim()||minutesData.title;
-    minutesData.date=document.querySelector('#r-date [contenteditable]')?.innerText.trim()||minutesData.date;
-    minutesData.attendees=(document.querySelector('#r-attendees [contenteditable]')?.innerText||'').split(',').map(s=>s.trim()).filter(Boolean);
-    minutesData.next_meeting=document.querySelector('#r-next [contenteditable]')?.innerText.trim()||minutesData.next_meeting;
-    document.querySelectorAll('[data-field="agenda"]').forEach((el,i)=>{if(minutesData.agenda[i]!==undefined) minutesData.agenda[i]=el.innerText.trim();});
-    document.querySelectorAll('[data-field="decisions"]').forEach((el,i)=>{if(minutesData.decisions[i]!==undefined) minutesData.decisions[i]=el.innerText.trim();});
-    document.querySelectorAll('[data-field="disc-topic"]').forEach((el,i)=>{if(minutesData.discussions[i]) minutesData.discussions[i].topic=el.innerText.trim();});
-    document.querySelectorAll('[data-field="disc-content"]').forEach((el,i)=>{if(minutesData.discussions[i]) minutesData.discussions[i].content=el.innerText.trim();});
-    document.querySelectorAll('[data-field="task"]').forEach((el,i)=>{if(minutesData.action_items[i]) minutesData.action_items[i].task=el.innerText.trim();});
-    document.querySelectorAll('[data-field="owner"]').forEach((el,i)=>{if(minutesData.action_items[i]) minutesData.action_items[i].owner=el.innerText.trim();});
-    document.querySelectorAll('[data-field="due"]').forEach((el,i)=>{if(minutesData.action_items[i]) minutesData.action_items[i].due=el.innerText.trim();});
-  }
+    file_bytes = await file.read()
+    print(f"[transcribe] 파일 수신: {file.filename}, {len(file_bytes)} bytes")
 
-  function toggleAllChecks(el) { document.querySelectorAll('.action-check').forEach(cb=>cb.checked=el.checked); }
+    if len(file_bytes) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=422, detail="파일이 너무 큽니다. 25MB 이하만 지원합니다.")
 
-  function addActionItem() {
-    if(!minutesData) return;
-    syncMinutesData();
-    minutesData.action_items.push({task:'새 액션아이템',owner:'미정',due:'미정'});
-    renderMinutes(minutesData);
-    const rows=document.querySelectorAll('[data-field="task"]');
-    const last=rows[rows.length-1];
-    if(last){last.focus();document.execCommand('selectAll',false,null);}
-  }
+    ext = (file.filename or "audio.mp4").rsplit(".", 1)[-1].lower()
+    mime_map = {"mp3": "audio/mpeg", "m4a": "audio/mp4", "wav": "audio/wav",
+                "webm": "audio/webm", "ogg": "audio/ogg", "mp4": "audio/mp4"}
+    mime = mime_map.get(ext, "audio/mp4")
 
-  function deleteActionItem(index) {
-    if(!minutesData) return;
-    syncMinutesData();
-    minutesData.action_items.splice(index,1);
-    renderMinutes(minutesData);
-  }
+    try:
+        import tempfile, subprocess, os as _os
 
-  // ─── Google Calendar ───
-  function getGoogleToken() {
-    return new Promise((resolve,reject)=>{
-      const client=google.accounts.oauth2.initTokenClient({
-        client_id:GOOGLE_CLIENT_ID,
-        scope:'https://www.googleapis.com/auth/calendar.events',
-        callback:(resp)=>{if(resp.error) reject(resp.error); else {googleAccessToken=resp.access_token;resolve(resp.access_token);}}
-      });
-      client.requestAccessToken();
-    });
-  }
+        # webm → mp3 변환 (Whisper 호환성 향상)
+        with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as tmp_in:
+            tmp_in.write(file_bytes)
+            tmp_in_path = tmp_in.name
 
-  async function addToCalendar() {
-    if(!minutesData) return;
-    syncMinutesData();
-    const items=minutesData.action_items||[];
-    if(items.length===0){alert('액션아이템이 없습니다.');return;}
-    const checked=document.querySelectorAll('.action-check:checked');
-    if(checked.length===0){alert('캘린더에 등록할 항목을 선택해주세요.');return;}
-    const selectedItems=Array.from(checked).map(cb=>items[parseInt(cb.dataset.index)]);
-    const btn=document.getElementById('calendarBtn');
-    btn.disabled=true; btn.textContent='⏳ 로그인 중...';
-    try {
-      const token=await getGoogleToken();
-      btn.textContent='⏳ 등록 중...';
-      let success=0;
-      for(const item of selectedItems) {
-        let startDate=new Date(); startDate.setDate(startDate.getDate()+1); startDate.setHours(9,0,0,0);
-        if(item.due && item.due!=='미정') {
-          const due=item.due; const year=new Date().getFullYear();
-          const koMatch=due.match(/(\d{1,2})월\s*(\d{1,2})일/);
-          const isoMatch=due.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
-          const slashMatch=due.match(/(\d{1,2})\/(\d{1,2})/);
-          if(isoMatch) startDate=new Date(parseInt(isoMatch[1]),parseInt(isoMatch[2])-1,parseInt(isoMatch[3]),9,0,0);
-          else if(koMatch) startDate=new Date(year,parseInt(koMatch[1])-1,parseInt(koMatch[2]),9,0,0);
-          else if(slashMatch) startDate=new Date(year,parseInt(slashMatch[1])-1,parseInt(slashMatch[2]),9,0,0);
-          else {const p=new Date(due); if(!isNaN(p)){startDate=p;startDate.setHours(9,0,0,0);}}
-        }
-        const endDate=new Date(startDate); endDate.setHours(endDate.getHours()+1);
-        const event={summary:`[회의 액션] ${item.task}`,description:`담당자: ${item.owner||'미정'}\n회의: ${minutesData.title||''}`,start:{dateTime:startDate.toISOString(),timeZone:'Asia/Seoul'},end:{dateTime:endDate.toISOString(),timeZone:'Asia/Seoul'}};
-        const res=await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events',{method:'POST',headers:{'Authorization':`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify(event)});
-        if(res.ok) success++;
-      }
-      const statusEl=document.getElementById('calendarStatus');
-      statusEl.style.display='block';
-      statusEl.textContent=`✅ ${success}개 액션아이템이 Google Calendar에 등록되었습니다!`;
-      btn.disabled=false; btn.textContent='📅 Google Calendar 등록';
-    } catch(e) {
-      alert('Calendar 등록 실패: '+e);
-      btn.disabled=false; btn.textContent='📅 Google Calendar 등록';
-    }
-  }
+        tmp_out_path = tmp_in_path.replace(f".{ext}", ".mp3")
+        result = subprocess.run(
+            ["ffmpeg", "-i", tmp_in_path, "-ar", "16000", "-ac", "1", "-y", tmp_out_path],
+            capture_output=True, timeout=120
+        )
+        print(f"[ffmpeg transcribe] returncode: {result.returncode}")
 
-  // ─── Word 다운로드 ───
-  function buildDocx(m) {
-    const {Document,Packer,Paragraph,TextRun,HeadingLevel,AlignmentType,LevelFormat,Table,TableRow,TableCell,WidthType,ShadingType,BorderStyle}=docx;
-    const font="맑은 고딕";
-    const border={style:BorderStyle.SINGLE,size:1,color:"CCCCCC"};
-    const borders={top:border,bottom:border,left:border,right:border};
-    const cell=(text,isHeader=false,w=4000)=>new TableCell({borders,width:{size:w,type:WidthType.DXA},shading:isHeader?{fill:"D5E8F0",type:ShadingType.CLEAR}:undefined,margins:{top:80,bottom:80,left:120,right:120},children:[new Paragraph({children:[new TextRun({text:String(text||''),bold:isHeader,size:22,font})]})]});
-    const children=[
-      new Paragraph({alignment:AlignmentType.CENTER,children:[new TextRun({text:m.title||'회의록',bold:true,size:36,font})]}),
-      new Paragraph({children:[]}),
-      new Table({width:{size:9026,type:WidthType.DXA},columnWidths:[2000,7026],rows:[
-        new TableRow({children:[cell('일시',true,2000),cell(m.date||'미기재',false,7026)]}),
-        new TableRow({children:[cell('참석자',true,2000),cell((m.attendees||[]).join(', '),false,7026)]}),
-        new TableRow({children:[cell('다음 회의',true,2000),cell(m.next_meeting||'미정',false,7026)]}),
-      ]}),
-      new Paragraph({children:[]}),
-    ];
-    const sec=t=>new Paragraph({heading:HeadingLevel.HEADING_2,children:[new TextRun({text:t,bold:true,size:26,font,color:"2E75B6"})]});
-    const bul=t=>new Paragraph({numbering:{reference:"bullets",level:0},children:[new TextRun({text:t,size:22,font})]});
-    if(m.agenda?.length){children.push(sec('📋 안건'));m.agenda.forEach(a=>children.push(bul(a)));children.push(new Paragraph({children:[]}));}
-    if(m.discussions?.length){children.push(sec('💬 논의 내용'));m.discussions.forEach(d=>{children.push(new Paragraph({children:[new TextRun({text:d.topic,bold:true,size:22,font})]}));children.push(new Paragraph({children:[new TextRun({text:d.content,size:22,font})]}));children.push(new Paragraph({children:[]}));});}
-    if(m.decisions?.length){children.push(sec('✅ 결정사항'));m.decisions.forEach(d=>children.push(bul(d)));children.push(new Paragraph({children:[]}));}
-    if(m.action_items?.length){children.push(sec('🎯 액션아이템'));children.push(new Table({width:{size:9026,type:WidthType.DXA},columnWidths:[4000,2500,2526],rows:[new TableRow({children:[cell('할일',true,4000),cell('담당자',true,2500),cell('기한',true,2526)]}), ...m.action_items.map(a=>new TableRow({children:[cell(a.task,false,4000),cell(a.owner||'미정',false,2500),cell(a.due||'미정',false,2526)]}))]}));}
-    return new Document({numbering:{config:[{reference:"bullets",levels:[{level:0,format:LevelFormat.BULLET,text:"•",alignment:AlignmentType.LEFT,style:{paragraph:{indent:{left:720,hanging:360}}}}]}]},styles:{default:{document:{run:{font,size:22}}},paragraphStyles:[{id:"Heading2",name:"Heading 2",basedOn:"Normal",next:"Normal",quickFormat:true,run:{size:26,bold:true,font,color:"2E75B6"},paragraph:{spacing:{before:200,after:100},outlineLevel:1}}]},sections:[{properties:{page:{size:{width:11906,height:16838},margin:{top:1440,right:1440,bottom:1440,left:1440}}},children}]});
-  }
+        if result.returncode == 0:
+            with open(tmp_out_path, "rb") as f:
+                send_bytes = f.read()
+            send_filename = "audio.mp3"
+            send_mime = "audio/mpeg"
+            print(f"[ffmpeg transcribe] mp3 변환 완료: {len(send_bytes)} bytes")
+        else:
+            print(f"[ffmpeg transcribe] 변환 실패, 원본 사용: {result.stderr.decode()[:200]}")
+            send_bytes = file_bytes
+            send_filename = file.filename
+            send_mime = mime
 
-  async function downloadDocx() {
-    if(!minutesData) return;
-    syncMinutesData();
-    const buffer=await docx.Packer.toBlob(buildDocx(minutesData));
-    const url=URL.createObjectURL(buffer);
-    const a=document.createElement('a'); a.href=url; a.download='회의록.docx'; a.click(); URL.revokeObjectURL(url);
-  }
+        for p in [tmp_in_path, tmp_out_path]:
+            try: _os.remove(p)
+            except: pass
 
-  async function downloadDocxFromDetail() {
-    if(!detailMinutesData) return;
-    const buffer=await docx.Packer.toBlob(buildDocx(detailMinutesData));
-    const url=URL.createObjectURL(buffer);
-    const a=document.createElement('a'); a.href=url; a.download='회의록.docx'; a.click(); URL.revokeObjectURL(url);
-  }
+        async with httpx.AsyncClient(timeout=120) as client:
+            response = await client.post(
+                GROQ_WHISPER_URL,
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+                files={"file": (send_filename, send_bytes, send_mime)},
+                data={
+                    "model": "whisper-large-v3-turbo",
+                    "response_format": "text",
+                    "prompt": "한국어와 영어가 혼용된 회의 내용입니다. 한국어는 한국어로, 영어는 영어로 정확하게 전사해주세요.",
+                },
+            )
+        log("Whisper", response.status_code, response.text)
+        if response.status_code != 200:
+            raise HTTPException(status_code=500, detail=f"음성인식 실패: {response.text}")
+        return {"transcript": response.text.strip()}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
 
-  function showError(msg){document.getElementById('errorBox').textContent=msg;document.getElementById('errorBox').style.display='block';document.getElementById('statusBox').style.display='none';}
-  function showStatus(msg){document.getElementById('errorBox').style.display='none';document.getElementById('statusText').textContent=msg;document.getElementById('statusBox').style.display='flex';}
 
-  function resetRecording(){
-    minutesData=null; seconds=0; fullTranscript=''; chunkCount=0; googleAccessToken=null; recordingBlob=null; allAudioChunks=[];
-    document.getElementById('timer').textContent='00:00:00';
-    document.getElementById('timer').className='timer';
-    document.getElementById('recordStatus').textContent='회의 시작 버튼을 눌러 녹음을 시작하세요';
-    document.getElementById('recordStatus').className='record-status';
-    document.getElementById('result').style.display='none';
-    document.getElementById('live-transcript-card').style.display='none';
-    document.getElementById('errorBox').style.display='none';
-    document.getElementById('statusBox').style.display='none';
-    document.getElementById('calendarStatus').style.display='none';
-    document.getElementById('saveStatus').style.display='none';
-    const btn=document.getElementById('calendarBtn');
-    btn.disabled=false; btn.textContent='📅 Google Calendar 등록';
-  }
+# ─────────────────────────────────────────
+# 텍스트 → 회의록 생성 (LLM)
+# ─────────────────────────────────────────
+class MinutesRequest(BaseModel):
+    transcript: str
 
-  async function doLogin() {
-    const pw = document.getElementById('loginPassword').value;
-    const errEl = document.getElementById('loginError');
-    try {
-      const res = await fetch(`${BACKEND}/login`, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({password: pw})
-      });
-      if(!res.ok) { errEl.style.display='block'; errEl.textContent='비밀번호가 올바르지 않습니다.'; return; }
-      const data = await res.json();
-      userRole = data.role;
-      sessionStorage.setItem('role', userRole);
-      document.getElementById('login-screen').style.display='none';
-      document.getElementById('main-app').style.display='flex';
-      applyRoleUI();
-      await init();
-    } catch(e) {
-      errEl.style.display='block'; errEl.textContent='서버 오류가 발생했습니다.';
-    }
-  }
 
-  function applyRoleUI() {
-    // 관리자만 삭제 버튼 보이게
-    const style = document.createElement('style');
-    if(userRole !== 'admin') {
-      style.textContent = '.project-delete, .meeting-item-delete { display: none !important; } .add-project-row { display: none !important; }';
-    }
-    document.head.appendChild(style);
-    // 사이드바 상단에 역할 표시
-    const sidebar = document.querySelector('.sidebar-title');
-    sidebar.innerHTML = `📁 프로젝트 <span style="font-size:11px;background:${userRole==='admin'?'#c0392b':'var(--accent)'};color:#fff;padding:2px 7px;border-radius:10px;margin-left:4px;">${userRole==='admin'?'관리자':'사용자'}</span>`;
-  }
+@app.post("/generate-minutes")
+async def generate_minutes(req: MinutesRequest):
+    if not GROQ_API_KEY:
+        raise HTTPException(status_code=500, detail="GROQ_API_KEY가 설정되지 않았습니다.")
 
-  // 초기화
-  async function init() {
-    try {
-      const res = await fetch(`${BACKEND}/config`);
-      const config = await res.json();
-      GOOGLE_CLIENT_ID = config.google_client_id;
-      SUPABASE_ANON_KEY = config.supabase_anon_key || '';
-    } catch(e) { console.warn('config 로드 실패:', e); }
-    await loadProjects();
-  }
+    print(f"[generate-minutes] transcript 길이: {len(req.transcript)}")
+    prompt = f"""다음은 회의 음성을 텍스트로 변환한 내용입니다.
 
-  // 로그인 상태 확인 (세션 유지)
-  const savedRole = sessionStorage.getItem('role');
-  if(savedRole) {
-    userRole = savedRole;
-    document.getElementById('login-screen').style.display='none';
-    document.getElementById('main-app').style.display='flex';
-    applyRoleUI();
-    init();
-  }
-</script>
-</body>
-</html>
+{req.transcript}
+
+위 내용을 바탕으로 아래 형식의 회의록을 작성해주세요. 반드시 JSON 형식으로만 응답하고 다른 텍스트는 포함하지 마세요.
+
+{{"title":"회의 제목","date":"일시 (언급된 경우, 없으면 미기재)","attendees":["참석자1"],"agenda":["안건1"],"discussions":[{{"topic":"주제","content":"논의 내용"}}],"decisions":["결정사항1"],"action_items":[{{"task":"할일","owner":"담당자","due":"기한"}}],"next_meeting":"다음 회의 일정 (없으면 미정)"}}"""
+
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.post(
+                GROQ_CHAT_URL,
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+                json={
+                    "model": "llama-3.3-70b-versatile",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 2048,
+                },
+            )
+        log("Groq LLM", response.status_code, response.text)
+        if response.status_code != 200:
+            raise HTTPException(status_code=500, detail=f"회의록 생성 실패: {response.text}")
+
+        content = response.json()["choices"][0]["message"]["content"].strip()
+        content = content.replace("```json", "").replace("```", "").strip()
+        try:
+            minutes = json.loads(content)
+        except Exception:
+            print(f"[generate-minutes] JSON 파싱 실패: {content[:300]}")
+            raise HTTPException(status_code=500, detail="회의록 파싱 실패. 다시 시도해주세요.")
+        return {"minutes": minutes}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────
+# 녹음 파일 업로드 / Signed URL
+# ─────────────────────────────────────────
+@app.post("/upload-recording")
+async def upload_recording(file: UploadFile = File(...)):
+    import tempfile, subprocess
+    file_bytes = await file.read()
+    filename = file.filename or "recording.webm"
+    print(f"[upload-recording] 파일: {filename}, {len(file_bytes)} bytes")
+
+    try:
+        # ffmpeg으로 duration 메타데이터 추가 (seek 가능하게)
+        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp_in:
+            tmp_in.write(file_bytes)
+            tmp_in_path = tmp_in.name
+
+        tmp_out_path = tmp_in_path.replace(".webm", "_fixed.webm")
+
+        result = subprocess.run(
+            ["ffmpeg", "-i", tmp_in_path, "-c", "copy", "-y", tmp_out_path],
+            capture_output=True, timeout=60
+        )
+        print(f"[ffmpeg] returncode: {result.returncode}")
+
+        if result.returncode == 0:
+            with open(tmp_out_path, "rb") as f:
+                file_bytes = f.read()
+            print(f"[ffmpeg] 변환 완료: {len(file_bytes)} bytes")
+        else:
+            print(f"[ffmpeg] 실패, 원본 사용: {result.stderr.decode()[:200]}")
+
+        # 임시 파일 정리
+        import os as _os
+        for p in [tmp_in_path, tmp_out_path]:
+            try: _os.remove(p)
+            except: pass
+
+        async with httpx.AsyncClient(timeout=120) as client:
+            res = await client.post(
+                f"{SUPABASE_URL}/storage/v1/object/recordings/{filename}",
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                    "Content-Type": "audio/webm",
+                },
+                content=file_bytes,
+            )
+        log("Supabase Storage Upload", res.status_code, res.text)
+        if res.status_code not in (200, 201):
+            raise HTTPException(status_code=500, detail=f"업로드 실패: {res.text}")
+        recording_url = f"{SUPABASE_URL}/storage/v1/object/recordings/{filename}"
+        return {"url": recording_url}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/recording-url")
+async def get_recording_url(path: str):
+    print(f"[recording-url] path: {path}")
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            res = await client.post(
+                f"{SUPABASE_URL}/storage/v1/object/sign/recordings/{path}",
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={"expiresIn": 3600},
+            )
+        log("Supabase Signed URL", res.status_code, res.text)
+        if res.status_code != 200:
+            raise HTTPException(status_code=500, detail=res.text)
+        signed_url = res.json().get("signedURL", "")
+        return {"url": f"{SUPABASE_URL}/storage/v1{signed_url}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/download-recording")
+async def download_recording(path: str):
+    """녹음 파일을 다운로드로 강제 제공"""
+    print(f"[download-recording] path: {path}")
+    try:
+        # Signed URL 발급
+        async with httpx.AsyncClient(timeout=30) as client:
+            sign_res = await client.post(
+                f"{SUPABASE_URL}/storage/v1/object/sign/recordings/{path}",
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={"expiresIn": 300},
+            )
+        if sign_res.status_code != 200:
+            raise HTTPException(status_code=500, detail=sign_res.text)
+
+        signed_url = f"{SUPABASE_URL}/storage/v1{sign_res.json().get('signedURL', '')}"
+
+        # 파일 스트리밍 다운로드
+        async with httpx.AsyncClient(timeout=120) as client:
+            file_res = await client.get(signed_url)
+
+        if file_res.status_code != 200:
+            raise HTTPException(status_code=500, detail="파일 다운로드 실패")
+
+        from fastapi.responses import Response
+        return Response(
+            content=file_res.content,
+            media_type="audio/webm",
+            headers={"Content-Disposition": f'attachment; filename="{path}"'}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+async def get_recording_url(path: str):
+    print(f"[recording-url] path: {path}")
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            res = await client.post(
+                f"{SUPABASE_URL}/storage/v1/object/sign/recordings/{path}",
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={"expiresIn": 3600},
+            )
+        log("Supabase Signed URL", res.status_code, res.text)
+        if res.status_code != 200:
+            raise HTTPException(status_code=500, detail=res.text)
+        signed_url = res.json().get("signedURL", "")
+        return {"url": f"{SUPABASE_URL}/storage/v1{signed_url}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────
+# 프로젝트 CRUD
+# ─────────────────────────────────────────
+class ProjectCreate(BaseModel):
+    name: str
+
+
+class ProjectUpdate(BaseModel):
+    name: str
+
+
+@app.get("/projects")
+async def get_projects():
+    async with httpx.AsyncClient() as client:
+        res = await client.get(
+            f"{SUPABASE_URL}/rest/v1/projects?order=created_at.desc",
+            headers=supabase_headers(),
+        )
+    log("Supabase GET /projects", res.status_code, res.text)
+    if res.status_code != 200:
+        raise HTTPException(status_code=500, detail=res.text)
+    return res.json()
+
+
+@app.post("/projects")
+async def create_project(req: ProjectCreate):
+    async with httpx.AsyncClient() as client:
+        res = await client.post(
+            f"{SUPABASE_URL}/rest/v1/projects",
+            headers=supabase_headers(),
+            json={"name": req.name},
+        )
+    log("Supabase POST /projects", res.status_code, res.text)
+    if res.status_code not in (200, 201):
+        raise HTTPException(status_code=500, detail=res.text)
+    return res.json()[0]
+
+
+@app.patch("/projects/{project_id}")
+async def update_project(project_id: str, req: ProjectUpdate):
+    async with httpx.AsyncClient() as client:
+        res = await client.patch(
+            f"{SUPABASE_URL}/rest/v1/projects?id=eq.{project_id}",
+            headers=supabase_headers(),
+            json={"name": req.name},
+        )
+    log("Supabase PATCH /projects", res.status_code, res.text)
+    if res.status_code not in (200, 204):
+        raise HTTPException(status_code=500, detail=res.text)
+    return {"success": True}
+
+
+@app.delete("/projects/{project_id}")
+async def delete_project(project_id: str):
+    async with httpx.AsyncClient() as client:
+        res = await client.delete(
+            f"{SUPABASE_URL}/rest/v1/projects?id=eq.{project_id}",
+            headers=supabase_headers(),
+        )
+    log("Supabase DELETE /projects", res.status_code, res.text)
+    if res.status_code not in (200, 204):
+        raise HTTPException(status_code=500, detail=res.text)
+    return {"success": True}
+
+
+# ─────────────────────────────────────────
+# 회의록 CRUD
+# ─────────────────────────────────────────
+@app.get("/projects/{project_id}/meetings")
+async def get_meetings(project_id: str):
+    async with httpx.AsyncClient() as client:
+        res = await client.get(
+            f"{SUPABASE_URL}/rest/v1/meetings?project_id=eq.{project_id}&order=created_at.desc",
+            headers=supabase_headers(),
+        )
+    log("Supabase GET /meetings", res.status_code, res.text)
+    if res.status_code != 200:
+        raise HTTPException(status_code=500, detail=res.text)
+    return res.json()
+
+
+class MeetingSave(BaseModel):
+    project_id: str
+    title: str
+    date: str
+    attendees: str
+    minutes_json: str
+    transcript: str
+    recording_url: str = ""
+
+
+@app.post("/meetings")
+async def save_meeting(req: MeetingSave):
+    async with httpx.AsyncClient() as client:
+        res = await client.post(
+            f"{SUPABASE_URL}/rest/v1/meetings",
+            headers=supabase_headers(),
+            json=req.model_dump(),
+        )
+    log("Supabase POST /meetings", res.status_code, res.text)
+    if res.status_code not in (200, 201):
+        raise HTTPException(status_code=500, detail=res.text)
+    return res.json()[0]
+
+
+class MeetingUpdate(BaseModel):
+    title: str
+
+
+@app.patch("/meetings/{meeting_id}")
+async def update_meeting(meeting_id: str, req: MeetingUpdate):
+    async with httpx.AsyncClient() as client:
+        res = await client.patch(
+            f"{SUPABASE_URL}/rest/v1/meetings?id=eq.{meeting_id}",
+            headers=supabase_headers(),
+            json={"title": req.title},
+        )
+    log("Supabase PATCH /meetings", res.status_code, res.text)
+    if res.status_code not in (200, 204):
+        raise HTTPException(status_code=500, detail=res.text)
+    return {"success": True}
+
+
+@app.delete("/meetings/{meeting_id}")
+async def delete_meeting(meeting_id: str):
+    async with httpx.AsyncClient() as client:
+        # 먼저 회의록 조회해서 recording_url 확인
+        get_res = await client.get(
+            f"{SUPABASE_URL}/rest/v1/meetings?id=eq.{meeting_id}&select=recording_url",
+            headers=supabase_headers(),
+        )
+        log("Supabase GET /meetings (before delete)", get_res.status_code, get_res.text)
+
+        # recording_url 있으면 Storage에서도 삭제
+        if get_res.status_code == 200:
+            rows = get_res.json()
+            if rows and rows[0].get("recording_url"):
+                filename = rows[0]["recording_url"].split("/recordings/")[-1].split("?")[0]
+                del_res = await client.delete(
+                    f"{SUPABASE_URL}/storage/v1/object/recordings/{filename}",
+                    headers={
+                        "apikey": SUPABASE_KEY,
+                        "Authorization": f"Bearer {SUPABASE_KEY}",
+                    },
+                )
+                log("Supabase Storage DELETE", del_res.status_code, del_res.text)
+
+        # 회의록 DB 삭제
+        res = await client.delete(
+            f"{SUPABASE_URL}/rest/v1/meetings?id=eq.{meeting_id}",
+            headers=supabase_headers(),
+        )
+    log("Supabase DELETE /meetings", res.status_code, res.text)
+    if res.status_code not in (200, 204):
+        raise HTTPException(status_code=500, detail=res.text)
+    return {"success": True}
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
