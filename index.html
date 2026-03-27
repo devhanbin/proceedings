@@ -143,8 +143,7 @@
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:2.5rem;width:100%;max-width:360px;text-align:center;">
     <div style="font-size:36px;margin-bottom:1rem;">🎙️</div>
     <h1 style="font-size:22px;font-weight:700;margin-bottom:6px;">회의록 자동생성 AI</h1>
-    <p style="font-size:14px;color:var(--text-secondary);margin-bottom:2rem;">AI 기반 회의록 자동 정리 시스템</p>
-    <input type="password" id="loginPassword" placeholder="비밀번호를 입력하세요" style="width:100%;padding:10px 14px;font-size:14px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);color:var(--text-primary);outline:none;margin-bottom:10px;" onkeydown="if(event.key==='Enter') doLogin()" />
+    <p style="font-size:14px;color:var(--text-secondary);margin-bottom:2rem;">AI 기반 회의록 자동 정리 시스템</p>    <input type="password" id="loginPassword" placeholder="비밀번호를 입력하세요" style="width:100%;padding:10px 14px;font-size:14px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);color:var(--text-primary);outline:none;margin-bottom:10px;" onkeydown="if(event.key==='Enter') doLogin()" />
     <div id="loginError" style="display:none;font-size:13px;color:var(--danger-text);margin-bottom:10px;"></div>
     <button onclick="doLogin()" style="width:100%;padding:11px;font-size:14px;font-weight:500;background:var(--accent);color:#fff;border:none;border-radius:var(--radius-sm);cursor:pointer;">로그인</button>
   </div>
@@ -202,11 +201,6 @@
           <button class="btn-record idle" id="recordBtn" onclick="toggleRecording()">▶</button>
           <div class="btn-label" id="btnLabel">회의 시작</div>
         </div>
-      </div>
-
-      <div class="card live-card" id="live-transcript-card">
-        <div class="card-label">📝 실시간 속기록 <span class="chunk-badge" id="chunkBadge">0 구간</span></div>
-        <div class="live-transcript" id="live-transcript">녹음 중... 3분마다 속기록이 업데이트됩니다.</div>
       </div>
 
       <div id="errorBox" class="error"></div>
@@ -307,20 +301,18 @@
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
   const BACKEND = 'https://proceedings-f9gn.onrender.com';
-  const CHUNK_INTERVAL_MS = 3 * 60 * 1000; // 3분
 
   let GOOGLE_CLIENT_ID = '';
   let SUPABASE_ANON_KEY = '';
-  let userRole = null; // 'admin' | 'user'
+  let userRole = null;
   let currentProjectId = null, currentProjectName = '';
   let cachedMeetings = [];
-  let mediaRecorder=null, audioChunks=[], allAudioChunks=[], isRecording=false;
-  let headerChunk=null; // 첫 번째 청크 헤더 저장
-  let timerInterval=null, chunkInterval=null, seconds=0;
+  let mediaRecorder=null, allAudioChunks=[], isRecording=false;
+  let timerInterval=null, seconds=0;
   let minutesData=null, mimeType='audio/webm';
-  let fullTranscript='', chunkCount=0, googleAccessToken=null;
+  let fullTranscript='', googleAccessToken=null;
   let recordingBlob=null;
-  let detailMinutesData=null;
+  let detailMinutesData=null, currentMeetingId=null;
 
   // ─── 뷰 전환 ───
   function showView(name) {
@@ -522,53 +514,16 @@
 
   async function toggleRecording() { if(!isRecording) await startRecording(); else await stopRecording(); }
 
-  async function flushChunk() {
-    if(audioChunks.length === 0) return;
-    const chunks = audioChunks.splice(0);
-    // 두 번째 청크부터 헤더 앞에 붙여서 완전한 webm 파일로 만들기
-    const blobParts = (headerChunk && chunks[0] !== headerChunk) ? [headerChunk, ...chunks] : chunks;
-    const blob = new Blob(blobParts, {type: mimeType});
-    if(blob.size < 5000) return;
-    for(let attempt=1; attempt<=2; attempt++) {
-      try {
-        const formData = new FormData();
-        formData.append('file', blob, 'chunk.webm');
-        if(isRecording) document.getElementById('recordStatus').textContent=`🔴 녹음 중... (구간 변환 중...)`;
-        const res = await fetch(`${BACKEND}/transcribe`, {method:'POST', body: formData});
-        if(!res.ok) { if(attempt===2 && isRecording) document.getElementById('recordStatus').textContent=`🔴 녹음 중... (구간 변환 실패, 계속 녹음 중)`; continue; }
-        const data = await res.json();
-        const text = (data.transcript||'').trim();
-        if(text) {
-          fullTranscript += (fullTranscript?'\n':'')+text;
-          chunkCount++;
-          const liveEl=document.getElementById('live-transcript');
-          liveEl.textContent=fullTranscript; liveEl.scrollTop=liveEl.scrollHeight;
-          document.getElementById('chunkBadge').textContent=`${chunkCount} 구간 완료`;
-          if(isRecording) document.getElementById('recordStatus').textContent=`🔴 녹음 중... (${chunkCount}구간 속기록 완료)`;
-        }
-        break;
-      } catch(e) { console.warn(`청크 오류 (시도${attempt}):`,e); }
-    }
-  }
-
   async function startRecording() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({audio:true});
-      audioChunks=[]; allAudioChunks=[]; fullTranscript=''; chunkCount=0; headerChunk=null;
+      allAudioChunks=[];
       mimeType=MediaRecorder.isTypeSupported('audio/webm;codecs=opus')?'audio/webm;codecs=opus':'audio/webm';
       mediaRecorder=new MediaRecorder(stream,{mimeType});
-      mediaRecorder.ondataavailable=e=>{
-        if(e.data.size>0){
-          audioChunks.push(e.data);
-          allAudioChunks.push(e.data);
-          // 첫 번째 청크를 헤더로 저장 (webm 초기화 데이터 포함)
-          if(!headerChunk) headerChunk = e.data;
-        }
-      };
+      mediaRecorder.ondataavailable=e=>{ if(e.data.size>0) allAudioChunks.push(e.data); };
       mediaRecorder.start(1000);
       isRecording=true; seconds=0;
       timerInterval=setInterval(updateTimer,1000);
-      chunkInterval=setInterval(flushChunk,CHUNK_INTERVAL_MS);
       document.getElementById('recordBtn').className='btn-record recording';
       document.getElementById('recordBtn').textContent='⏹';
       document.getElementById('btnLabel').textContent='회의 종료';
@@ -578,32 +533,33 @@
       document.getElementById('waveform').classList.add('active');
       document.getElementById('errorBox').style.display='none';
       document.getElementById('result').style.display='none';
-      document.getElementById('live-transcript-card').style.display='block';
-      document.getElementById('chunkBadge').textContent='0 구간';
     } catch(e) { showError('마이크 접근 권한이 필요합니다.'); }
   }
 
   async function stopRecording() {
-    clearInterval(timerInterval); clearInterval(chunkInterval);
+    clearInterval(timerInterval);
     isRecording=false;
     document.getElementById('recordBtn').disabled=true;
     document.getElementById('recordBtn').textContent='⏳';
     document.getElementById('btnLabel').textContent='처리 중...';
-    document.getElementById('recordStatus').textContent='녹음 완료! 마지막 구간 변환 중...';
+    document.getElementById('recordStatus').textContent='녹음 완료! 저장 버튼을 눌러 회의록을 생성하세요.';
     document.getElementById('recordStatus').className='record-status';
     document.getElementById('timer').className='timer';
     document.getElementById('waveform').classList.remove('active');
     await new Promise(resolve=>{mediaRecorder.onstop=resolve; mediaRecorder.stop();});
     mediaRecorder.stream.getTracks().forEach(t=>t.stop());
-    // 전체 녹음 blob 저장 (청크 전송과 무관하게 전체 누적)
     recordingBlob = new Blob(allAudioChunks, {type: mimeType});
-    showStatus('🎤 마지막 구간 음성 변환 중...');
-    await flushChunk();
-    await generateMinutes(fullTranscript);
     document.getElementById('recordBtn').disabled=false;
     document.getElementById('recordBtn').className='btn-record idle';
     document.getElementById('recordBtn').textContent='▶';
     document.getElementById('btnLabel').textContent='새 회의 시작';
+    // 저장 버튼 바로 보여주기
+    document.getElementById('result').style.display='block';
+    document.getElementById('statusBox').style.display='none';
+    // 빈 회의록 표시 (저장 후 채워짐)
+    minutesData = {title:'(저장 후 생성됩니다)',date:'',attendees:[],agenda:[],discussions:[],decisions:[],action_items:[],next_meeting:''};
+    renderMinutes(minutesData);
+    document.getElementById('result').scrollIntoView({behavior:'smooth'});
   }
 
   async function generateMinutes(transcript) {
@@ -854,13 +810,12 @@
   function showStatus(msg){document.getElementById('errorBox').style.display='none';document.getElementById('statusText').textContent=msg;document.getElementById('statusBox').style.display='flex';}
 
   function resetRecording(){
-    minutesData=null; seconds=0; fullTranscript=''; chunkCount=0; googleAccessToken=null; recordingBlob=null; allAudioChunks=[]; headerChunk=null;
+    minutesData=null; seconds=0; fullTranscript=''; googleAccessToken=null; recordingBlob=null; allAudioChunks=[];
     document.getElementById('timer').textContent='00:00:00';
     document.getElementById('timer').className='timer';
     document.getElementById('recordStatus').textContent='회의 시작 버튼을 눌러 녹음을 시작하세요';
     document.getElementById('recordStatus').className='record-status';
     document.getElementById('result').style.display='none';
-    document.getElementById('live-transcript-card').style.display='none';
     document.getElementById('errorBox').style.display='none';
     document.getElementById('statusBox').style.display='none';
     document.getElementById('calendarStatus').style.display='none';
