@@ -307,7 +307,7 @@
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
   const BACKEND = 'https://proceedings-f9gn.onrender.com';
-  const CHUNK_INTERVAL_MS = 1 * 60 * 1000; // 3분
+  const CHUNK_INTERVAL_MS = 3 * 60 * 1000; // 3분
 
   let GOOGLE_CLIENT_ID = '';
   let SUPABASE_ANON_KEY = '';
@@ -628,29 +628,40 @@
 
   // ─── 저장 ───
   async function saveMeeting() {
-    if(!minutesData || !currentProjectId) { alert('프로젝트를 선택해주세요.'); return; }
-    syncMinutesData();
-    const btn = event.target;
-    btn.disabled=true; btn.textContent='저장 중...';
-    try {
-      // 녹음 파일 업로드
-      let recording_url = '';
-      if(recordingBlob && recordingBlob.size > 0) {
-        btn.textContent='🎵 녹음 파일 업로드 중...';
-        try {
-          const filename = `${currentProjectId}_${Date.now()}.webm`;
-          const formData = new FormData();
-          formData.append('file', recordingBlob, filename);
-          const uploadRes = await fetch(`${BACKEND}/upload-recording`, {method:'POST', body: formData});
-          if(uploadRes.ok) {
-            const uploadData = await uploadRes.json();
-            recording_url = uploadData.url;
-          } else {
-            console.warn('녹음 업로드 실패:', await uploadRes.text());
-          }
-        } catch(e) { console.warn('녹음 업로드 오류:', e); }
-      }
+    if(!currentProjectId) { alert('프로젝트를 선택해주세요.'); return; }
+    if(!recordingBlob || recordingBlob.size === 0) { alert('녹음 파일이 없습니다.'); return; }
 
+    const btn = event.target;
+    btn.disabled=true;
+
+    try {
+      const filename = `${currentProjectId}_${Date.now()}.webm`;
+      const formData = new FormData();
+      formData.append('file', recordingBlob, filename);
+
+      // 1. 녹음 파일 업로드 + Whisper + LLM 처리 (백엔드에서 한번에)
+      btn.textContent='🎵 녹음 파일 업로드 중...';
+      const processRes = await fetch(`${BACKEND}/upload-recording`, {method:'POST', body: formData});
+      if(!processRes.ok) throw new Error('녹음 업로드 실패: ' + await processRes.text());
+      const uploadData = await processRes.json();
+      const recording_url = uploadData.url;
+
+      // 2. 전체 녹음으로 회의록 재생성
+      btn.textContent='🎤 전체 음성 변환 중...';
+      const processFormData = new FormData();
+      processFormData.append('file', recordingBlob, filename);
+      const processMinutesRes = await fetch(`${BACKEND}/process-recording`, {method:'POST', body: processFormData});
+      if(!processMinutesRes.ok) throw new Error('회의록 생성 실패: ' + await processMinutesRes.text());
+      const processData = await processMinutesRes.json();
+
+      // 전체 녹음 기반 회의록으로 업데이트
+      minutesData = processData.minutes;
+      fullTranscript = processData.transcript;
+      renderMinutes(minutesData);
+      document.getElementById('r-transcript').textContent = fullTranscript;
+      syncMinutesData();
+
+      // 3. DB 저장
       btn.textContent='💾 회의록 저장 중...';
       await fetch(`${BACKEND}/meetings`, {
         method:'POST',
@@ -665,14 +676,20 @@
           recording_url
         })
       });
+
       const saveEl=document.getElementById('saveStatus');
       saveEl.style.display='block';
-      saveEl.textContent=`✅ 저장되었습니다!${recording_url ? ' (녹음 파일 포함)' : ''}`;
+      saveEl.textContent='✅ 전체 녹음 기반으로 저장되었습니다!';
       btn.textContent='✅ 저장됨';
       setTimeout(()=>{ btn.disabled=false; btn.textContent='💾 저장'; }, 2000);
     } catch(e) {
-      alert('저장 실패: '+e.message);
-      btn.disabled=false; btn.textContent='💾 저장';
+      // 실패 시 재시도 버튼 표시
+      const saveEl=document.getElementById('saveStatus');
+      saveEl.style.display='block';
+      saveEl.style.color='var(--danger-text)';
+      saveEl.textContent=`❌ 저장 실패: ${e.message}. 녹음 파일은 유지됩니다.`;
+      btn.disabled=false;
+      btn.textContent='🔄 다시 저장';
     }
   }
 

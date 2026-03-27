@@ -91,21 +91,28 @@ async def transcribe(file: UploadFile = File(...)):
         send_filename = "audio.mp4"
         send_mime = "audio/mp4"
 
-        async with httpx.AsyncClient(timeout=120) as client:
-            response = await client.post(
-                GROQ_WHISPER_URL,
-                headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
-                files={"file": (send_filename, send_bytes, send_mime)},
-                data={
-                    "model": "whisper-large-v3-turbo",
-                    "response_format": "text",
-                    "language": "ko",
-                    "prompt": "한국어와 영어가 혼용된 회의 내용입니다. 한국어는 한국어로, 영어는 영어로 정확하게 전사해주세요.",
-                },
-            )
-        log("Whisper", response.status_code, response.text)
-        if response.status_code != 200:
-            raise HTTPException(status_code=500, detail=f"음성인식 실패: {response.text}")
+        for attempt in range(1, 3):  # 최대 2회 시도
+            async with httpx.AsyncClient(timeout=120) as client:
+                response = await client.post(
+                    GROQ_WHISPER_URL,
+                    headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+                    files={"file": (send_filename, send_bytes, send_mime)},
+                    data={
+                        "model": "whisper-large-v3-turbo",
+                        "response_format": "text",
+                        "language": "ko",
+                        "prompt": "안녕하세요. 오늘 회의를 시작하겠습니다.",
+                    },
+                )
+            log("Whisper", response.status_code, response.text)
+            if response.status_code == 200:
+                break
+            if response.status_code == 500 and attempt < 2:
+                print(f"[Whisper] 서버 오류, 재시도 ({attempt}/2)...")
+                import asyncio
+                await asyncio.sleep(2)
+            else:
+                raise HTTPException(status_code=500, detail=f"음성인식 실패: {response.text}")
         return {"transcript": response.text.strip()}
     except HTTPException:
         raise
@@ -470,6 +477,124 @@ async def delete_meeting(meeting_id: str):
     if res.status_code not in (200, 204):
         raise HTTPException(status_code=500, detail=res.text)
     return {"success": True}
+
+
+@app.post("/process-recording")
+async def process_recording(file: UploadFile = File(...)):
+    """전체 녹음 파일을 ffmpeg으로 분할 → Whisper → LLM → 회의록 반환"""
+    import tempfile, subprocess, os as _os, uuid, asyncio
+
+    file_bytes = await file.read()
+    filename = file.filename or "recording.webm"
+    print(f"[process-recording] 파일: {filename}, {len(file_bytes)} bytes")
+
+    tmp_id = str(uuid.uuid4())[:8]
+    tmp_dir = tempfile.gettempdir()
+    tmp_in_path = _os.path.join(tmp_dir, f"rec_in_{tmp_id}.webm")
+    tmp_out_pattern = _os.path.join(tmp_dir, f"rec_chunk_{tmp_id}_%03d.mp3")
+
+    try:
+        with open(tmp_in_path, "wb") as f:
+            f.write(file_bytes)
+
+        # ffmpeg으로 10분(600초)씩 mp3로 분할
+        result = subprocess.run(
+            ["ffmpeg", "-i", tmp_in_path,
+             "-ar", "16000", "-ac", "1",
+             "-f", "segment", "-segment_time", "600",
+             "-y", tmp_out_pattern],
+            capture_output=True, timeout=300
+        )
+        print(f"[ffmpeg split] returncode: {result.returncode}")
+        if result.returncode != 0:
+            print(f"[ffmpeg split] stderr: {result.stderr.decode()}")
+            raise HTTPException(status_code=500, detail="오디오 분할 실패")
+
+        # 생성된 청크 파일 목록 (순서대로)
+        chunk_files = sorted([
+            _os.path.join(tmp_dir, f)
+            for f in _os.listdir(tmp_dir)
+            if f.startswith(f"rec_chunk_{tmp_id}_") and f.endswith(".mp3")
+        ])
+        print(f"[process-recording] 청크 수: {len(chunk_files)}")
+
+        # 각 청크를 순서대로 Whisper 전송
+        transcripts = []
+        for i, chunk_path in enumerate(chunk_files):
+            with open(chunk_path, "rb") as f:
+                chunk_bytes = f.read()
+            print(f"[process-recording] 청크 {i+1}/{len(chunk_files)}: {len(chunk_bytes)} bytes")
+
+            for attempt in range(1, 3):
+                async with httpx.AsyncClient(timeout=120) as client:
+                    response = await client.post(
+                        GROQ_WHISPER_URL,
+                        headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+                        files={"file": (f"chunk_{i}.mp3", chunk_bytes, "audio/mpeg")},
+                        data={
+                            "model": "whisper-large-v3-turbo",
+                            "response_format": "text",
+                            "language": "ko",
+                            "prompt": "안녕하세요. 오늘 회의를 시작하겠습니다.",
+                        },
+                    )
+                log(f"Whisper chunk {i+1}", response.status_code, response.text)
+                if response.status_code == 200:
+                    transcripts.append(response.text.strip())
+                    break
+                if response.status_code == 500 and attempt < 2:
+                    print(f"[Whisper] 서버 오류, 재시도...")
+                    await asyncio.sleep(2)
+                else:
+                    print(f"[Whisper] 청크 {i+1} 실패, 건너뜀: {response.text}")
+                    break
+
+            # 청크 임시 파일 삭제
+            try: _os.remove(chunk_path)
+            except: pass
+
+        full_transcript = "\n".join(transcripts)
+        print(f"[process-recording] 전체 transcript 길이: {len(full_transcript)}")
+
+        if not full_transcript.strip():
+            raise HTTPException(status_code=500, detail="음성 인식 결과가 없습니다.")
+
+        # LLM으로 회의록 생성
+        prompt = f"""다음은 회의 음성을 텍스트로 변환한 내용입니다.
+
+{full_transcript}
+
+위 내용을 바탕으로 아래 형식의 회의록을 작성해주세요. 반드시 JSON 형식으로만 응답하고 다른 텍스트는 포함하지 마세요.
+
+{{"title":"회의 제목","date":"일시 (언급된 경우, 없으면 미기재)","attendees":["참석자1"],"agenda":["안건1"],"discussions":[{{"topic":"주제","content":"논의 내용"}}],"decisions":["결정사항1"],"action_items":[{{"task":"할일","owner":"담당자","due":"기한"}}],"next_meeting":"다음 회의 일정 (없으면 미정)"}}"""
+
+        async with httpx.AsyncClient(timeout=60) as client:
+            llm_res = await client.post(
+                GROQ_CHAT_URL,
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+                json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}], "max_tokens": 2048},
+            )
+        log("Groq LLM", llm_res.status_code, llm_res.text)
+        if llm_res.status_code != 200:
+            raise HTTPException(status_code=500, detail=f"회의록 생성 실패: {llm_res.text}")
+
+        content = llm_res.json()["choices"][0]["message"]["content"].strip()
+        content = content.replace("```json", "").replace("```", "").strip()
+        try:
+            minutes = json.loads(content)
+        except Exception:
+            raise HTTPException(status_code=500, detail="회의록 파싱 실패")
+
+        return {"minutes": minutes, "transcript": full_transcript}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try: _os.remove(tmp_in_path)
+        except: pass
 
 
 @app.get("/health")
