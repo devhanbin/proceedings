@@ -315,6 +315,7 @@
   let currentProjectId = null, currentProjectName = '';
   let cachedMeetings = [];
   let mediaRecorder=null, audioChunks=[], allAudioChunks=[], isRecording=false;
+  let headerChunk=null; // 첫 번째 청크 헤더 저장
   let timerInterval=null, chunkInterval=null, seconds=0;
   let minutesData=null, mimeType='audio/webm';
   let fullTranscript='', chunkCount=0, googleAccessToken=null;
@@ -524,7 +525,9 @@
   async function flushChunk() {
     if(audioChunks.length === 0) return;
     const chunks = audioChunks.splice(0);
-    const blob = new Blob(chunks, {type: mimeType});
+    // 두 번째 청크부터 헤더 앞에 붙여서 완전한 webm 파일로 만들기
+    const blobParts = (headerChunk && chunks[0] !== headerChunk) ? [headerChunk, ...chunks] : chunks;
+    const blob = new Blob(blobParts, {type: mimeType});
     if(blob.size < 5000) return;
     for(let attempt=1; attempt<=2; attempt++) {
       try {
@@ -551,10 +554,17 @@
   async function startRecording() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({audio:true});
-      audioChunks=[]; allAudioChunks=[]; fullTranscript=''; chunkCount=0;
+      audioChunks=[]; allAudioChunks=[]; fullTranscript=''; chunkCount=0; headerChunk=null;
       mimeType=MediaRecorder.isTypeSupported('audio/webm;codecs=opus')?'audio/webm;codecs=opus':'audio/webm';
       mediaRecorder=new MediaRecorder(stream,{mimeType});
-      mediaRecorder.ondataavailable=e=>{if(e.data.size>0){ audioChunks.push(e.data); allAudioChunks.push(e.data); }};
+      mediaRecorder.ondataavailable=e=>{
+        if(e.data.size>0){
+          audioChunks.push(e.data);
+          allAudioChunks.push(e.data);
+          // 첫 번째 청크를 헤더로 저장 (webm 초기화 데이터 포함)
+          if(!headerChunk) headerChunk = e.data;
+        }
+      };
       mediaRecorder.start(1000);
       isRecording=true; seconds=0;
       timerInterval=setInterval(updateTimer,1000);
@@ -827,7 +837,7 @@
   function showStatus(msg){document.getElementById('errorBox').style.display='none';document.getElementById('statusText').textContent=msg;document.getElementById('statusBox').style.display='flex';}
 
   function resetRecording(){
-    minutesData=null; seconds=0; fullTranscript=''; chunkCount=0; googleAccessToken=null; recordingBlob=null; allAudioChunks=[];
+    minutesData=null; seconds=0; fullTranscript=''; chunkCount=0; googleAccessToken=null; recordingBlob=null; allAudioChunks=[]; headerChunk=null;
     document.getElementById('timer').textContent='00:00:00';
     document.getElementById('timer').className='timer';
     document.getElementById('recordStatus').textContent='회의 시작 버튼을 눌러 녹음을 시작하세요';
