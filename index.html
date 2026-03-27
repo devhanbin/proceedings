@@ -143,7 +143,8 @@
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:2.5rem;width:100%;max-width:360px;text-align:center;">
     <div style="font-size:36px;margin-bottom:1rem;">🎙️</div>
     <h1 style="font-size:22px;font-weight:700;margin-bottom:6px;">회의록 자동생성 AI</h1>
-    <p style="font-size:14px;color:var(--text-secondary);margin-bottom:2rem;">AI 기반 회의록 자동 정리 시스템</p>    <input type="password" id="loginPassword" placeholder="비밀번호를 입력하세요" style="width:100%;padding:10px 14px;font-size:14px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);color:var(--text-primary);outline:none;margin-bottom:10px;" onkeydown="if(event.key==='Enter') doLogin()" />
+    <p style="font-size:14px;color:var(--text-secondary);margin-bottom:2rem;">AI 기반 회의록 자동 정리 시스템</p>
+    <input type="password" id="loginPassword" placeholder="비밀번호를 입력하세요" style="width:100%;padding:10px 14px;font-size:14px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);color:var(--text-primary);outline:none;margin-bottom:10px;" onkeydown="if(event.key==='Enter') doLogin()" />
     <div id="loginError" style="display:none;font-size:13px;color:var(--danger-text);margin-bottom:10px;"></div>
     <button onclick="doLogin()" style="width:100%;padding:11px;font-size:14px;font-weight:500;background:var(--accent);color:#fff;border:none;border-radius:var(--radius-sm);cursor:pointer;">로그인</button>
   </div>
@@ -312,7 +313,7 @@
   let minutesData=null, mimeType='audio/webm';
   let fullTranscript='', googleAccessToken=null;
   let recordingBlob=null;
-  let detailMinutesData=null, currentMeetingId=null;
+  let detailMinutesData=null;
 
   // ─── 뷰 전환 ───
   function showView(name) {
