@@ -49,6 +49,7 @@ async def get_config():
     return {
         "google_client_id": GOOGLE_CLIENT_ID,
         "supabase_anon_key": SUPABASE_KEY,
+        "supabase_url": SUPABASE_URL,
     }
 
 
@@ -567,6 +568,126 @@ async def process_recording(file: UploadFile = File(...)):
 위 내용을 바탕으로 아래 형식의 회의록을 작성해주세요. 반드시 JSON 형식으로만 응답하고 다른 텍스트는 포함하지 마세요.
 
 {{"title":"회의 제목","date":"일시 (언급된 경우, 없으면 미기재)","attendees":["참석자1"],"agenda":["안건1"],"discussions":[{{"topic":"주제","content":"논의 내용"}}],"decisions":["결정사항1"],"action_items":[{{"task":"할일","owner":"담당자","due":"기한"}}],"next_meeting":"다음 회의 일정 (없으면 미정)"}}"""
+
+        async with httpx.AsyncClient(timeout=60) as client:
+            llm_res = await client.post(
+                GROQ_CHAT_URL,
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+                json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}], "max_tokens": 2048},
+            )
+        log("Groq LLM", llm_res.status_code, llm_res.text)
+        if llm_res.status_code != 200:
+            raise HTTPException(status_code=500, detail=f"회의록 생성 실패: {llm_res.text}")
+
+        content = llm_res.json()["choices"][0]["message"]["content"].strip()
+        content = content.replace("```json", "").replace("```", "").strip()
+        try:
+            minutes = json.loads(content)
+        except Exception:
+            raise HTTPException(status_code=500, detail="회의록 파싱 실패")
+
+        return {"minutes": minutes, "transcript": full_transcript}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try: _os.remove(tmp_in_path)
+        except: pass
+
+
+class ProcessByPathRequest(BaseModel):
+    path: str
+
+
+@app.post("/process-recording-by-path")
+async def process_recording_by_path(req: ProcessByPathRequest):
+    """Storage에 있는 파일 경로로 회의록 생성"""
+    import tempfile, subprocess, os as _os, uuid, asyncio
+
+    print(f"[process-recording-by-path] path: {req.path}")
+
+    tmp_id = str(uuid.uuid4())[:8]
+    tmp_dir = tempfile.gettempdir()
+    tmp_in_path = _os.path.join(tmp_dir, f"rec_in_{tmp_id}.webm")
+    tmp_out_pattern = _os.path.join(tmp_dir, f"rec_chunk_{tmp_id}_%03d.mp3")
+
+    try:
+        # Supabase Storage에서 파일 다운로드
+        async with httpx.AsyncClient(timeout=300) as client:
+            sign_res = await client.post(
+                f"{SUPABASE_URL}/storage/v1/object/sign/recordings/{req.path}",
+                headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"},
+                json={"expiresIn": 300},
+            )
+        if sign_res.status_code != 200:
+            raise HTTPException(status_code=500, detail=f"Signed URL 발급 실패: {sign_res.text}")
+
+        signed_url = f"{SUPABASE_URL}/storage/v1{sign_res.json().get('signedURL', '')}"
+        print(f"[process-recording-by-path] 파일 다운로드 중...")
+
+        async with httpx.AsyncClient(timeout=300) as client:
+            file_res = await client.get(signed_url)
+        if file_res.status_code != 200:
+            raise HTTPException(status_code=500, detail="파일 다운로드 실패")
+
+        with open(tmp_in_path, "wb") as f:
+            f.write(file_res.content)
+        print(f"[process-recording-by-path] 다운로드 완료: {len(file_res.content)} bytes")
+
+        # ffmpeg으로 10분씩 mp3 분할
+        result = subprocess.run(
+            ["ffmpeg", "-i", tmp_in_path, "-ar", "16000", "-ac", "1",
+             "-f", "segment", "-segment_time", "600", "-y", tmp_out_pattern],
+            capture_output=True, timeout=300
+        )
+        print(f"[ffmpeg split] returncode: {result.returncode}")
+        if result.returncode != 0:
+            print(f"[ffmpeg split] stderr: {result.stderr.decode()}")
+            raise HTTPException(status_code=500, detail="오디오 분할 실패")
+
+        chunk_files = sorted([
+            _os.path.join(tmp_dir, f)
+            for f in _os.listdir(tmp_dir)
+            if f.startswith(f"rec_chunk_{tmp_id}_") and f.endswith(".mp3")
+        ])
+        print(f"[process-recording-by-path] 청크 수: {len(chunk_files)}")
+
+        transcripts = []
+        for i, chunk_path in enumerate(chunk_files):
+            with open(chunk_path, "rb") as f:
+                chunk_bytes = f.read()
+            print(f"[process-recording-by-path] Whisper 청크 {i+1}/{len(chunk_files)}: {len(chunk_bytes)} bytes")
+
+            for attempt in range(1, 3):
+                async with httpx.AsyncClient(timeout=120) as client:
+                    response = await client.post(
+                        GROQ_WHISPER_URL,
+                        headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+                        files={"file": (f"chunk_{i}.mp3", chunk_bytes, "audio/mpeg")},
+                        data={"model": "whisper-large-v3-turbo", "response_format": "text", "language": "ko", "prompt": "안녕하세요. 오늘 회의를 시작하겠습니다."},
+                    )
+                log(f"Whisper chunk {i+1}", response.status_code, response.text)
+                if response.status_code == 200:
+                    transcripts.append(response.text.strip())
+                    break
+                if response.status_code == 500 and attempt < 2:
+                    await asyncio.sleep(2)
+                else:
+                    print(f"[Whisper] 청크 {i+1} 실패, 건너뜀")
+                    break
+
+            try: _os.remove(chunk_path)
+            except: pass
+
+        full_transcript = "\n".join(transcripts)
+        if not full_transcript.strip():
+            raise HTTPException(status_code=500, detail="음성 인식 결과가 없습니다.")
+
+        # LLM 회의록 생성
+        prompt = f"""다음은 회의 음성을 텍스트로 변환한 내용입니다.\n\n{full_transcript}\n\n위 내용을 바탕으로 아래 형식의 회의록을 작성해주세요. 반드시 JSON 형식으로만 응답하고 다른 텍스트는 포함하지 마세요.\n\n{{"title":"회의 제목","date":"일시 (언급된 경우, 없으면 미기재)","attendees":["참석자1"],"agenda":["안건1"],"discussions":[{{"topic":"주제","content":"논의 내용"}}],"decisions":["결정사항1"],"action_items":[{{"task":"할일","owner":"담당자","due":"기한"}}],"next_meeting":"다음 회의 일정 (없으면 미정)"}}"""
 
         async with httpx.AsyncClient(timeout=60) as client:
             llm_res = await client.post(

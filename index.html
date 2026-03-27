@@ -593,23 +593,31 @@
 
     try {
       const filename = `${currentProjectId}_${Date.now()}.webm`;
-      const formData = new FormData();
-      formData.append('file', recordingBlob, filename);
 
-      // 1. 녹음 파일 업로드 + Whisper + LLM 처리 (백엔드에서 한번에)
+      // 1. 브라우저에서 직접 Supabase Storage에 업로드 (백엔드 타임아웃 우회)
       btn.textContent='🎵 녹음 파일 업로드 중...';
-      const processRes = await fetch(`${BACKEND}/upload-recording`, {method:'POST', body: formData});
-      if(!processRes.ok) throw new Error('녹음 업로드 실패: ' + await processRes.text());
-      const uploadData = await processRes.json();
-      const recording_url = uploadData.url;
+      const supabaseUrl = await fetch(`${BACKEND}/config`).then(r=>r.json()).then(d=>d.supabase_url);
+      const uploadRes = await fetch(`${supabaseUrl}/storage/v1/object/recordings/${filename}`, {
+        method: 'POST',
+        headers: {
+          'apikey': SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          'Content-Type': 'audio/webm',
+        },
+        body: recordingBlob
+      });
+      if(!uploadRes.ok) throw new Error('녹음 업로드 실패: ' + await uploadRes.text());
+      const recording_url = `${supabaseUrl}/storage/v1/object/recordings/${filename}`;
 
-      // 2. 전체 녹음으로 회의록 재생성
-      btn.textContent='🎤 전체 음성 변환 중...';
-      const processFormData = new FormData();
-      processFormData.append('file', recordingBlob, filename);
-      const processMinutesRes = await fetch(`${BACKEND}/process-recording`, {method:'POST', body: processFormData});
-      if(!processMinutesRes.ok) throw new Error('회의록 생성 실패: ' + await processMinutesRes.text());
-      const processData = await processMinutesRes.json();
+      // 2. 백엔드에 파일 경로 전달해서 처리 요청
+      btn.textContent='🎤 전체 음성 변환 중... (시간이 걸릴 수 있어요)';
+      const processRes = await fetch(`${BACKEND}/process-recording-by-path`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({path: filename})
+      });
+      if(!processRes.ok) throw new Error('회의록 생성 실패: ' + await processRes.text());
+      const processData = await processRes.json();
 
       // 전체 녹음 기반 회의록으로 업데이트
       minutesData = processData.minutes;
