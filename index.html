@@ -314,6 +314,7 @@
   let fullTranscript='', googleAccessToken=null;
   let recordingBlob=null;
   let detailMinutesData=null;
+  let savedMeetingId=null;
 
   // ─── 뷰 전환 ───
   function showView(name) {
@@ -583,18 +584,45 @@
     }
   }
 
-  // ─── 저장 ───
+  // ─── 저장 / 수정 ───
   async function saveMeeting() {
     if(!currentProjectId) { alert('프로젝트를 선택해주세요.'); return; }
-    if(!recordingBlob || recordingBlob.size === 0) { alert('녹음 파일이 없습니다.'); return; }
 
     const btn = event.target;
     btn.disabled=true;
+    const saveEl=document.getElementById('saveStatus');
+    saveEl.style.color='';
 
     try {
+      // ── 이미 저장된 경우: 수정 저장 (PATCH) ──
+      if(savedMeetingId) {
+        syncMinutesData();
+        btn.textContent='💾 수정 저장 중...';
+        const patchRes = await fetch(`${BACKEND}/meetings/${savedMeetingId}`, {
+          method:'PATCH',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({
+            title: minutesData.title||'제목 없음',
+            date: minutesData.date||'',
+            attendees: (minutesData.attendees||[]).join(', '),
+            minutes_json: JSON.stringify(minutesData),
+            transcript: fullTranscript,
+          })
+        });
+        if(!patchRes.ok) throw new Error('수정 저장 실패: ' + await patchRes.text());
+        saveEl.style.display='block';
+        saveEl.textContent='✅ 수정 내용이 저장되었습니다!';
+        btn.textContent='✅ 저장됨';
+        setTimeout(()=>{ btn.disabled=false; btn.textContent='✏️ 수정 저장'; }, 2000);
+        return;
+      }
+
+      // ── 최초 저장 ──
+      if(!recordingBlob || recordingBlob.size === 0) { alert('녹음 파일이 없습니다.'); btn.disabled=false; return; }
+
       const filename = `${currentProjectId}_${Date.now()}.webm`;
 
-      // 1. 브라우저에서 직접 Supabase Storage에 업로드 (백엔드 타임아웃 우회)
+      // 1. 브라우저에서 직접 Supabase Storage에 업로드
       btn.textContent='🎵 녹음 파일 업로드 중...';
       const supabaseUrl = await fetch(`${BACKEND}/config`).then(r=>r.json()).then(d=>d.supabase_url);
       const uploadRes = await fetch(`${supabaseUrl}/storage/v1/object/recordings/${filename}`, {
@@ -619,16 +647,15 @@
       if(!processRes.ok) throw new Error('회의록 생성 실패: ' + await processRes.text());
       const processData = await processRes.json();
 
-      // 전체 녹음 기반 회의록으로 업데이트
       minutesData = processData.minutes;
       fullTranscript = processData.transcript;
       renderMinutes(minutesData);
       document.getElementById('r-transcript').textContent = fullTranscript;
       syncMinutesData();
 
-      // 3. DB 저장
+      // 3. DB 저장 (POST)
       btn.textContent='💾 회의록 저장 중...';
-      await fetch(`${BACKEND}/meetings`, {
+      const saveRes = await fetch(`${BACKEND}/meetings`, {
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body: JSON.stringify({
@@ -641,20 +668,20 @@
           recording_url
         })
       });
+      if(!saveRes.ok) throw new Error('DB 저장 실패: ' + await saveRes.text());
+      const savedMeeting = await saveRes.json();
+      savedMeetingId = savedMeeting.id;  // 이후 수정 저장에 사용
 
-      const saveEl=document.getElementById('saveStatus');
       saveEl.style.display='block';
-      saveEl.textContent='✅ 전체 녹음 기반으로 저장되었습니다!';
+      saveEl.textContent='✅ 저장되었습니다! 내용을 클릭해 수정할 수 있어요.';
       btn.textContent='✅ 저장됨';
-      setTimeout(()=>{ btn.disabled=false; btn.textContent='💾 저장'; }, 2000);
+      setTimeout(()=>{ btn.disabled=false; btn.textContent='✏️ 수정 저장'; }, 2000);
     } catch(e) {
-      // 실패 시 재시도 버튼 표시
-      const saveEl=document.getElementById('saveStatus');
       saveEl.style.display='block';
       saveEl.style.color='var(--danger-text)';
-      saveEl.textContent=`❌ 저장 실패: ${e.message}. 녹음 파일은 유지됩니다.`;
+      saveEl.textContent=`❌ 저장 실패: ${e.message}. 다시 시도해 주세요.`;
       btn.disabled=false;
-      btn.textContent='🔄 다시 저장';
+      btn.textContent= savedMeetingId ? '🔄 다시 저장' : '🔄 다시 저장';
     }
   }
 
@@ -819,7 +846,10 @@
   function showStatus(msg){document.getElementById('errorBox').style.display='none';document.getElementById('statusText').textContent=msg;document.getElementById('statusBox').style.display='flex';}
 
   function resetRecording(){
-    minutesData=null; seconds=0; fullTranscript=''; googleAccessToken=null; recordingBlob=null; allAudioChunks=[];
+    minutesData=null; seconds=0; fullTranscript=''; googleAccessToken=null; recordingBlob=null; allAudioChunks=[]; savedMeetingId=null;
+    document.getElementById('saveStatus').style.color='';
+    const saveBtn = document.querySelector('.actions-row .btn-primary');
+    if(saveBtn) { saveBtn.disabled=false; saveBtn.textContent='💾 저장'; }
     document.getElementById('timer').textContent='00:00:00';
     document.getElementById('timer').className='timer';
     document.getElementById('recordStatus').textContent='회의 시작 버튼을 눌러 녹음을 시작하세요';

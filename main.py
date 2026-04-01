@@ -428,16 +428,23 @@ async def save_meeting(req: MeetingSave):
 
 
 class MeetingUpdate(BaseModel):
-    title: str
+    title: str | None = None
+    date: str | None = None
+    attendees: str | None = None
+    minutes_json: str | None = None
+    transcript: str | None = None
 
 
 @app.patch("/meetings/{meeting_id}")
 async def update_meeting(meeting_id: str, req: MeetingUpdate):
+    payload = {k: v for k, v in req.model_dump().items() if v is not None}
+    if not payload:
+        raise HTTPException(status_code=400, detail="수정할 내용이 없습니다.")
     async with httpx.AsyncClient() as client:
         res = await client.patch(
             f"{SUPABASE_URL}/rest/v1/meetings?id=eq.{meeting_id}",
             headers=supabase_headers(),
-            json={"title": req.title},
+            json=payload,
         )
     log("Supabase PATCH /meetings", res.status_code, res.text)
     if res.status_code not in (200, 204):
