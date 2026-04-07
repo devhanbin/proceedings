@@ -289,9 +289,12 @@
           </div>
           <div class="section"><div class="section-title">📝 전체 속기록</div><div class="transcript-box" id="d-transcript"></div></div>
         </div>
+        <div class="edit-hint" id="detail-edit-hint" style="display:none">✏️ 내용을 클릭하면 바로 수정할 수 있어요</div>
         <div class="actions-row" style="margin-top:1rem">
           <button class="btn btn-green" onclick="downloadDocxFromDetail()">📄 Word 다운로드</button>
+          <button class="btn btn-primary" id="detail-save-btn" style="display:none" onclick="saveDetailChanges()">✏️ 수정 저장</button>
         </div>
+        <div id="detail-save-status" style="display:none;margin-top:8px;font-size:12px;"></div>
       </div>
     </div>
 
@@ -441,9 +444,20 @@
     try {
       detailMinutesData = JSON.parse(meeting.minutes_json);
     } catch(e) { detailMinutesData = {}; }
-    document.getElementById('detail-title').textContent = meeting.title || '제목 없음';
-    renderDetail(detailMinutesData);
+    const isAdmin = userRole === 'admin';
+    const titleEl = document.getElementById('detail-title');
+    titleEl.textContent = meeting.title || '제목 없음';
+    titleEl.style.cursor = isAdmin ? 'pointer' : 'default';
+    titleEl.title = isAdmin ? '클릭하여 제목 수정' : '';
+    titleEl.onclick = isAdmin ? editDetailTitle : null;
+
+    renderDetail(detailMinutesData, isAdmin);
     document.getElementById('d-transcript').textContent = meeting.transcript || '';
+    document.getElementById('detail-edit-hint').style.display = isAdmin ? 'block' : 'none';
+    document.getElementById('detail-save-btn').style.display = isAdmin ? 'inline-block' : 'none';
+    const statusEl = document.getElementById('detail-save-status');
+    statusEl.style.display = 'none';
+    statusEl.textContent = '';
 
     // 녹음 파일 플레이어
     if(meeting.recording_url) {
@@ -483,14 +497,79 @@
     if(meeting) meeting.title = newTitle.trim();
   }
 
-  function renderDetail(m) {
-    document.getElementById('d-date').textContent = m.date||'미기재';
-    document.getElementById('d-attendees').textContent = (m.attendees||[]).join(', ')||'미기재';
-    document.getElementById('d-next').textContent = m.next_meeting||'미정';
-    document.getElementById('d-agenda').innerHTML=(m.agenda||[]).map(a=>`<div class="list-item">${a}</div>`).join('')||'<div class="list-item" style="color:var(--text-muted)">없음</div>';
-    document.getElementById('d-discussions').innerHTML=(m.discussions||[]).map(d=>`<div class="discussion-item"><div class="discussion-topic">${d.topic}</div><div class="discussion-content">${d.content}</div></div>`).join('');
-    document.getElementById('d-decisions').innerHTML=(m.decisions||[]).map(d=>`<div class="list-item">${d}</div>`).join('')||'<div class="list-item" style="color:var(--text-muted)">없음</div>';
-    document.getElementById('d-actions').innerHTML=(m.action_items||[]).map(a=>`<tr><td>${a.task||''}</td><td>${a.owner||'미정'}</td><td>${a.due||'미정'}</td></tr>`).join('');
+  function renderDetail(m, editable=false) {
+    const e = (val) => editable ? `<span contenteditable="true">${val}</span>` : val;
+    document.getElementById('d-date').innerHTML = e(m.date||'미기재');
+    document.getElementById('d-attendees').innerHTML = e((m.attendees||[]).join(', ')||'미기재');
+    document.getElementById('d-next').innerHTML = e(m.next_meeting||'미정');
+    document.getElementById('d-agenda').innerHTML=(m.agenda||[]).map((a,i)=>
+      `<div class="list-item">${editable?`<span contenteditable="true" data-d-field="agenda" data-index="${i}">${a}</span>`:a}</div>`
+    ).join('')||'<div class="list-item" style="color:var(--text-muted)">없음</div>';
+    document.getElementById('d-discussions').innerHTML=(m.discussions||[]).map((d,i)=>
+      `<div class="discussion-item">
+        <div class="discussion-topic">${editable?`<span contenteditable="true" data-d-field="disc-topic" data-index="${i}">${d.topic}</span>`:d.topic}</div>
+        <div class="discussion-content">${editable?`<span contenteditable="true" data-d-field="disc-content" data-index="${i}">${d.content}</span>`:d.content}</div>
+      </div>`).join('');
+    document.getElementById('d-decisions').innerHTML=(m.decisions||[]).map((d,i)=>
+      `<div class="list-item">${editable?`<span contenteditable="true" data-d-field="decisions" data-index="${i}">${d}</span>`:d}</div>`
+    ).join('')||'<div class="list-item" style="color:var(--text-muted)">없음</div>';
+    document.getElementById('d-actions').innerHTML=(m.action_items||[]).map((a,i)=>
+      `<tr>
+        <td>${editable?`<span contenteditable="true" data-d-field="task" data-index="${i}">${a.task||''}</span>`:a.task||''}</td>
+        <td>${editable?`<span contenteditable="true" data-d-field="owner" data-index="${i}">${a.owner||'미정'}</span>`:a.owner||'미정'}</td>
+        <td>${editable?`<span contenteditable="true" data-d-field="due" data-index="${i}">${a.due||'미정'}</span>`:a.due||'미정'}</td>
+      </tr>`).join('');
+  }
+
+  function syncDetailData() {
+    if(!detailMinutesData) return;
+    detailMinutesData.date = document.querySelector('#d-date [contenteditable]')?.innerText.trim() || detailMinutesData.date;
+    detailMinutesData.attendees = (document.querySelector('#d-attendees [contenteditable]')?.innerText||'').split(',').map(s=>s.trim()).filter(Boolean);
+    detailMinutesData.next_meeting = document.querySelector('#d-next [contenteditable]')?.innerText.trim() || detailMinutesData.next_meeting;
+    document.querySelectorAll('[data-d-field="agenda"]').forEach((el,i)=>{if(detailMinutesData.agenda[i]!==undefined) detailMinutesData.agenda[i]=el.innerText.trim();});
+    document.querySelectorAll('[data-d-field="decisions"]').forEach((el,i)=>{if(detailMinutesData.decisions[i]!==undefined) detailMinutesData.decisions[i]=el.innerText.trim();});
+    document.querySelectorAll('[data-d-field="disc-topic"]').forEach((el,i)=>{if(detailMinutesData.discussions[i]) detailMinutesData.discussions[i].topic=el.innerText.trim();});
+    document.querySelectorAll('[data-d-field="disc-content"]').forEach((el,i)=>{if(detailMinutesData.discussions[i]) detailMinutesData.discussions[i].content=el.innerText.trim();});
+    document.querySelectorAll('[data-d-field="task"]').forEach((el,i)=>{if(detailMinutesData.action_items[i]) detailMinutesData.action_items[i].task=el.innerText.trim();});
+    document.querySelectorAll('[data-d-field="owner"]').forEach((el,i)=>{if(detailMinutesData.action_items[i]) detailMinutesData.action_items[i].owner=el.innerText.trim();});
+    document.querySelectorAll('[data-d-field="due"]').forEach((el,i)=>{if(detailMinutesData.action_items[i]) detailMinutesData.action_items[i].due=el.innerText.trim();});
+  }
+
+  async function saveDetailChanges() {
+    syncDetailData();
+    const title = document.getElementById('detail-title').textContent.trim();
+    const btn = document.getElementById('detail-save-btn');
+    const statusEl = document.getElementById('detail-save-status');
+    btn.disabled = true;
+    btn.textContent = '저장 중...';
+    statusEl.style.color = '';
+    try {
+      const res = await fetch(`${BACKEND}/meetings/${currentMeetingId}`, {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          title,
+          date: detailMinutesData.date||'',
+          attendees: (detailMinutesData.attendees||[]).join(', '),
+          minutes_json: JSON.stringify(detailMinutesData),
+        })
+      });
+      if(!res.ok) throw new Error(await res.text());
+      // 캐시 업데이트
+      const meeting = cachedMeetings.find(m => m.id === currentMeetingId);
+      if(meeting) { meeting.title = title; meeting.minutes_json = JSON.stringify(detailMinutesData); }
+      statusEl.style.display = 'block';
+      statusEl.style.color = '#1a6b3c';
+      statusEl.textContent = '✅ 수정 내용이 저장되었습니다!';
+      btn.textContent = '✅ 저장됨';
+      setTimeout(()=>{ btn.disabled=false; btn.textContent='✏️ 수정 저장'; }, 2000);
+    } catch(e) {
+      statusEl.style.display = 'block';
+      statusEl.style.color = 'var(--danger-text)';
+      statusEl.textContent = `❌ 저장 실패: ${e.message}`;
+      btn.disabled = false;
+      btn.textContent = '✏️ 수정 저장';
+    }
   }
 
   function switchDetailTab(tab) {
@@ -521,7 +600,7 @@
       const stream = await navigator.mediaDevices.getUserMedia({audio:true});
       allAudioChunks=[];
       mimeType=MediaRecorder.isTypeSupported('audio/webm;codecs=opus')?'audio/webm;codecs=opus':'audio/webm';
-      mediaRecorder=new MediaRecorder(stream,{mimeType});
+      mediaRecorder=new MediaRecorder(stream,{mimeType, audioBitsPerSecond: 32000});
       mediaRecorder.ondataavailable=e=>{ if(e.data.size>0) allAudioChunks.push(e.data); };
       mediaRecorder.start(1000);
       isRecording=true; seconds=0;
