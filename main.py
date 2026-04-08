@@ -433,6 +433,7 @@ class MeetingUpdate(BaseModel):
     attendees: str | None = None
     minutes_json: str | None = None
     transcript: str | None = None
+    project_id: str | None = None
 
 
 @app.patch("/meetings/{meeting_id}")

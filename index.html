@@ -30,6 +30,8 @@
     .project-item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .project-delete { opacity: 0; font-size: 16px; color: var(--danger); border: none; background: none; cursor: pointer; padding: 0 2px; }
     .project-item:hover .project-delete { opacity: 1; }
+    .project-item.drop-over { background: var(--accent-light); outline: 2px dashed var(--accent); }
+    .meeting-item.dragging { opacity: 0.4; }
     .add-project-row { display: flex; gap: 6px; margin-top: 1rem; }
     .add-project-input { flex: 1; padding: 7px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); outline: none; }
     .add-project-input:focus { border-color: var(--border-strong); }
@@ -318,6 +320,7 @@
   let recordingBlob=null;
   let detailMinutesData=null;
   let savedMeetingId=null;
+  let pendingFilename=null;
 
   // ─── 뷰 전환 ───
   function showView(name) {
@@ -337,7 +340,11 @@
       return;
     }
     list.innerHTML = projects.map(p => `
-      <div class="project-item ${p.id===currentProjectId?'active':''}" onclick="selectProject('${p.id}','${p.name.replace(/'/g,"\\'")}')">
+      <div class="project-item ${p.id===currentProjectId?'active':''}"
+           onclick="selectProject('${p.id}','${p.name.replace(/'/g,"\\'")}') "
+           ondragover="event.preventDefault();this.classList.add('drop-over')"
+           ondragleave="this.classList.remove('drop-over')"
+           ondrop="onProjectDrop(event,'${p.id}','${p.name.replace(/'/g,"\\'")}')">
         <span class="project-item-name" ondblclick="event.stopPropagation();editProjectName('${p.id}','${p.name.replace(/'/g,"\\'")}')">📁 ${p.name}</span>
         <button class="project-delete" onclick="event.stopPropagation();deleteProject('${p.id}')" title="삭제">×</button>
       </div>`).join('');
@@ -398,6 +405,34 @@
     showView('list');
   }
 
+  // ─── 드래그 앤 드롭 ───
+  let draggingMeetingId = null;
+
+  function onMeetingDragStart(event, meetingId) {
+    draggingMeetingId = meetingId;
+    event.dataTransfer.effectAllowed = 'move';
+    event.target.classList.add('dragging');
+  }
+
+  function onMeetingDragEnd(event) {
+    event.target.classList.remove('dragging');
+    document.querySelectorAll('.project-item.drop-over').forEach(el => el.classList.remove('drop-over'));
+  }
+
+  async function onProjectDrop(event, targetProjectId, targetProjectName) {
+    event.preventDefault();
+    event.currentTarget.classList.remove('drop-over');
+    if(!draggingMeetingId || targetProjectId === currentProjectId) return;
+    const res = await fetch(`${BACKEND}/meetings/${draggingMeetingId}`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({project_id: targetProjectId})
+    });
+    if(!res.ok) { alert('이동 실패: ' + await res.text()); return; }
+    draggingMeetingId = null;
+    await loadMeetings(currentProjectId);
+  }
+
   // ─── 회의록 목록 ───
   async function loadMeetings(projectId) {
     const res = await fetch(`${BACKEND}/projects/${projectId}/meetings`);
@@ -409,7 +444,10 @@
       return;
     }
     list.innerHTML = cachedMeetings.map(m => `
-      <div class="meeting-item" onclick="showDetail('${m.id}')">
+      <div class="meeting-item" draggable="true"
+           ondragstart="onMeetingDragStart(event,'${m.id}')"
+           ondragend="onMeetingDragEnd(event)"
+           onclick="showDetail('${m.id}')">
         <div class="meeting-item-info">
           <div class="meeting-item-title">${m.title || '제목 없음'}</div>
           <div class="meeting-item-meta">${m.date || '날짜 미기재'} · ${m.attendees || '참석자 미기재'}</div>
@@ -699,7 +737,8 @@
       // ── 최초 저장 ──
       if(!recordingBlob || recordingBlob.size === 0) { alert('녹음 파일이 없습니다.'); btn.disabled=false; return; }
 
-      const filename = `${currentProjectId}_${Date.now()}.webm`;
+      if(!pendingFilename) pendingFilename = `${currentProjectId}_${Date.now()}.webm`;
+      const filename = pendingFilename;
 
       // 1. 브라우저에서 직접 Supabase Storage에 업로드
       btn.textContent='🎵 녹음 파일 업로드 중...';
@@ -710,6 +749,7 @@
           'apikey': SUPABASE_ANON_KEY,
           'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
           'Content-Type': 'audio/webm',
+          'x-upsert': 'true',
         },
         body: recordingBlob
       });
@@ -925,7 +965,7 @@
   function showStatus(msg){document.getElementById('errorBox').style.display='none';document.getElementById('statusText').textContent=msg;document.getElementById('statusBox').style.display='flex';}
 
   function resetRecording(){
-    minutesData=null; seconds=0; fullTranscript=''; googleAccessToken=null; recordingBlob=null; allAudioChunks=[]; savedMeetingId=null;
+    minutesData=null; seconds=0; fullTranscript=''; googleAccessToken=null; recordingBlob=null; allAudioChunks=[]; savedMeetingId=null; pendingFilename=null;
     document.getElementById('saveStatus').style.color='';
     const saveBtn = document.querySelector('.actions-row .btn-primary');
     if(saveBtn) { saveBtn.disabled=false; saveBtn.textContent='💾 저장'; }
