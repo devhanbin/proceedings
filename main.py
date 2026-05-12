@@ -149,7 +149,7 @@ async def generate_minutes(req: MinutesRequest):
                 GROQ_CHAT_URL,
                 headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
                 json={
-                    "model": "llama-3.3-70b-versatile",
+                    "model": "llama-3.1-8b-instant",
                     "messages": [{"role": "user", "content": prompt}],
                     "max_tokens": 2048,
                 },
@@ -581,7 +581,7 @@ async def process_recording(file: UploadFile = File(...)):
             llm_res = await client.post(
                 GROQ_CHAT_URL,
                 headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-                json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}], "max_tokens": 2048},
+                json={"model": "llama-3.1-8b-instant", "messages": [{"role": "user", "content": prompt}], "max_tokens": 2048},
             )
         log("Groq LLM", llm_res.status_code, llm_res.text)
         if llm_res.status_code != 200:
@@ -701,7 +701,7 @@ async def process_recording_by_path(req: ProcessByPathRequest):
             llm_res = await client.post(
                 GROQ_CHAT_URL,
                 headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-                json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}], "max_tokens": 2048},
+                json={"model": "llama-3.1-8b-instant", "messages": [{"role": "user", "content": prompt}], "max_tokens": 2048},
             )
         log("Groq LLM", llm_res.status_code, llm_res.text)
         if llm_res.status_code != 200:
